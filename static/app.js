@@ -5,9 +5,14 @@ const FEED_POLL_MS = 2000
 
 const state = {
   agent: null, // the agent being viewed, or null on the list
-  source: 'visible',
+  source: 'recent', // scrollback by default; the screen alone has nothing to scroll
   hash: null,
   timer: null,
+}
+
+/** Labels the toggle with the source it switches *to*. */
+function setSourceLabel(showing) {
+  $('toggle-source').textContent = showing === 'recent' ? 'screen' : 'scrollback'
 }
 
 async function api(path, options) {
@@ -136,6 +141,10 @@ async function pollFeed() {
       $('feed-sub').textContent = `${state.agent.agent} · ${state.agent.dir} · ${body.status}`
     }
 
+    // The server downgrades to the screen when a working agent has no
+    // capturable history, so the label follows the answer, not the request.
+    if (body.source) setSourceLabel(body.source)
+
     if (body.unchanged) return
 
     const feed = $('feed')
@@ -158,13 +167,13 @@ async function pollFeed() {
 
 export function showFeed(agent) {
   state.agent = { ...agent }
-  state.source = 'visible'
+  state.source = 'recent'
   state.hash = null
 
   $('feed-title').textContent = agent.title
   $('feed-sub').textContent = `${agent.agent} · ${agent.dir} · ${agent.status}`
   $('feed').textContent = ''
-  $('toggle-source').textContent = 'recent'
+  setSourceLabel(state.source)
 
   $('list-view').classList.remove('active')
   $('feed-view').classList.add('active')
@@ -195,7 +204,7 @@ $('back').onclick = () => showList()
 $('toggle-source').onclick = () => {
   state.source = state.source === 'visible' ? 'recent' : 'visible'
   state.hash = null
-  $('toggle-source').textContent = state.source === 'visible' ? 'recent' : 'screen'
+  setSourceLabel(state.source)
   pollFeed()
 }
 

@@ -421,9 +421,9 @@ test('GET feed returns cleaned text, a hash, and the current status', async () =
 
     const read = fake.calls.find((c) => c.method === 'agent.read')
     assert.equal(read.params.target, 'w2:p3')
-    assert.equal(read.params.source, 'visible')
+    assert.equal(read.params.source, 'recent')
     assert.equal(read.params.strip_ansi, true)
-    assert.equal(read.params.lines, 60)
+    assert.equal(read.params.lines, 1000)
   } finally {
     await app.close()
     await fake.close()
@@ -443,7 +443,7 @@ test('GET feed with a matching hash returns unchanged and no body text', async (
   try {
     const h = hashFeed(text)
     const same = await (await fetch(`${app.url}/api/agents/w2:p3/feed?h=${h}`, { headers: AUTH })).json()
-    assert.deepEqual(same, { unchanged: true, hash: h, status: 'blocked' })
+    assert.deepEqual(same, { unchanged: true, hash: h, status: 'blocked', source: 'recent' })
 
     const differs = await (await fetch(`${app.url}/api/agents/w2:p3/feed?h=nope`, { headers: AUTH })).json()
     assert.equal(differs.text, text)
@@ -469,7 +469,74 @@ test('GET feed clamps lines and defaults recent to 1000', async () => {
     const reads = fake.calls.filter((c) => c.method === 'agent.read')
     assert.equal(reads[0].params.lines, 1000)
     assert.equal(reads[1].params.lines, 1000)
-    assert.equal(reads[2].params.source, 'visible', 'an unknown source falls back rather than passing through')
+    assert.equal(reads[2].params.source, 'recent', 'an unknown source falls back rather than passing through')
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('GET feed defaults to the scrollback, not the visible screen', async () => {
+  const fake = await fakeHerdr(
+    herdrFixture(() => ({ result: { type: 'pane_read', read: { text: 'x', truncated: false } } }))
+  )
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    const body = await (await fetch(`${app.url}/api/agents/w2:p3/feed`, { headers: AUTH })).json()
+    const read = fake.calls.find((c) => c.method === 'agent.read')
+    assert.equal(read.params.source, 'recent')
+    assert.equal(read.params.lines, 1000)
+    assert.equal(body.source, 'recent', 'the body reports which source actually answered')
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('GET feed falls back to the visible screen when the agent is mid-work', async () => {
+  // Herdr refuses scrollback for a working alternate-screen TUI; the phone must
+  // still get the screen rather than a 502.
+  const fake = await fakeHerdr(
+    herdrFixture((req) =>
+      req.params.source === 'recent'
+        ? { error: { code: 'agent_not_idle', message: 'cannot read 1000 lines while w2:p3 is working' } }
+        : { result: { type: 'pane_read', read: { text: 'the screen', truncated: false } } }
+    )
+  )
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    const res = await fetch(`${app.url}/api/agents/w2:p3/feed`, { headers: AUTH })
+    assert.equal(res.status, 200)
+    const body = await res.json()
+    assert.equal(body.text, 'the screen')
+    assert.equal(body.source, 'visible', 'the client is told it is looking at the screen')
+    const reads = fake.calls.filter((c) => c.method === 'agent.read')
+    assert.deepEqual(reads.map((r) => r.params.source), ['recent', 'visible'])
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('an explicit source=visible is honoured and not upgraded', async () => {
+  const fake = await fakeHerdr(
+    herdrFixture(() => ({ result: { type: 'pane_read', read: { text: 'x', truncated: false } } }))
+  )
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    const body = await (
+      await fetch(`${app.url}/api/agents/w2:p3/feed?source=visible`, { headers: AUTH })
+    ).json()
+    const read = fake.calls.find((c) => c.method === 'agent.read')
+    assert.equal(read.params.source, 'visible')
+    assert.equal(read.params.lines, 60)
+    assert.equal(body.source, 'visible')
   } finally {
     await app.close()
     await fake.close()

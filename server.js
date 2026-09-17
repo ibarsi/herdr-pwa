@@ -151,21 +151,40 @@ const MAX_LINES = 1000
 async function readFeed(res, paneId, query) {
   const agent = await requireLiveAgent(paneId)
 
-  const source = query.get('source') === 'recent' ? 'recent' : 'visible'
+  // Scrollback is the default, and anything unrecognised resolves to it rather
+  // than passing through. `visible` is one phone-height of screen capture with
+  // no history behind it, so opening there gives nothing to scroll up into.
   const requested = Number.parseInt(query.get('lines') ?? '', 10)
-  const lines = Number.isFinite(requested)
-    ? Math.min(Math.max(requested, 1), MAX_LINES)
-    : DEFAULT_LINES[source]
+  const readSource = (source) =>
+    herdr('agent.read', {
+      target: paneId,
+      source,
+      lines: Number.isFinite(requested)
+        ? Math.min(Math.max(requested, 1), MAX_LINES)
+        : DEFAULT_LINES[source],
+      strip_ansi: true,
+    })
+      // The payload is nested at result.read, not on result directly.
+      .then((r) => ({ source, read: r.read }))
 
-  // The payload is nested at result.read, not on result directly.
-  const { read } = await herdr('agent.read', { target: paneId, source, lines, strip_ansi: true })
+  let answer
+  try {
+    answer = await readSource(query.get('source') === 'visible' ? 'visible' : 'recent')
+  } catch (err) {
+    // claude and grok paint to the alternate screen, so while they are working
+    // Herdr cannot capture their history at all — it only exists as redrawn
+    // screen state. The screen is still worth reading, so degrade to it.
+    if (!(err instanceof HerdrError) || err.code !== 'agent_not_idle') throw err
+    answer = await readSource('visible')
+  }
 
+  const { source, read } = answer
   const text = cleanFeed(read.text ?? '')
   const hash = hashFeed(text)
   const status = agent.agent_status ?? 'unknown'
 
-  if (query.get('h') === hash) return sendJson(res, 200, { unchanged: true, hash, status })
-  sendJson(res, 200, { text, hash, truncated: Boolean(read.truncated), status })
+  if (query.get('h') === hash) return sendJson(res, 200, { unchanged: true, hash, status, source })
+  sendJson(res, 200, { text, hash, truncated: Boolean(read.truncated), status, source })
 }
 
 const MAX_BODY = 64 * 1024
