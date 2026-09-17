@@ -75,12 +75,19 @@ export async function requireLiveAgent(paneId) {
   return agent
 }
 
-function projectAgent(a) {
+function projectAgent(a, spaces = new Map()) {
   return {
     pane_id: a.pane_id,
     agent: a.agent,
     status: a.agent_status ?? 'unknown',
-    title: a.terminal_title_stripped || a.terminal_title || a.agent || a.pane_id,
+    // The space label first: it is the name the user chose, whereas a terminal
+    // title is whatever the agent last wrote there — often just "grok".
+    title:
+      spaces.get(a.workspace_id) ||
+      a.terminal_title_stripped ||
+      a.terminal_title ||
+      a.agent ||
+      a.pane_id,
     cwd: a.cwd ?? '',
     dir: (a.cwd ?? '').split('/').filter(Boolean).pop() ?? '',
     state_change_seq: a.state_change_seq ?? 0,
@@ -88,9 +95,15 @@ function projectAgent(a) {
 }
 
 async function listAgents(res) {
-  const { agents } = await herdr('agent.list', {})
+  const [{ agents }, workspaces] = await Promise.all([
+    herdr('agent.list', {}),
+    // Labels are cosmetic, so a herdr that cannot answer this still gets a
+    // usable list rather than a 502.
+    herdr('workspace.list', {}).then((r) => r.workspaces ?? [], () => []),
+  ])
+  const spaces = new Map(workspaces.map((w) => [w.workspace_id, w.label]))
   const projected = agents
-    .map(projectAgent)
+    .map((a) => projectAgent(a, spaces))
     .sort(
       (a, b) =>
         (STATUS_ORDER[a.status] ?? 3) - (STATUS_ORDER[b.status] ?? 3) || a.title.localeCompare(b.title)
@@ -130,8 +143,10 @@ function authorised(req) {
   return typeof allowed === 'string' && allowed !== '' && req.headers['tailscale-user-login'] === allowed
 }
 
-const DEFAULT_LINES = { visible: 60, recent: 200 }
-const MAX_LINES = 500
+// 1000 is Herdr's own ceiling for source=recent: it returns the same 1000-line
+// payload for any larger request, so asking for more is just a bigger number.
+const DEFAULT_LINES = { visible: 60, recent: 1000 }
+const MAX_LINES = 1000
 
 async function readFeed(res, paneId, query) {
   const agent = await requireLiveAgent(paneId)

@@ -228,6 +228,7 @@ const AGENT_LIST = {
         agent: 'claude',
         agent_status: 'idle',
         cwd: '/home/user/project',
+        workspace_id: 'w1',
         terminal_title: 'raw title',
         terminal_title_stripped: 'Nice Title',
         state_change_seq: 7,
@@ -238,11 +239,32 @@ const AGENT_LIST = {
         agent: 'grok',
         agent_status: 'blocked',
         cwd: '/home/user/herdr-pwa',
+        workspace_id: 'w2',
         state_change_seq: 9,
       },
     ],
   },
 }
+
+const WORKSPACE_LIST = {
+  result: {
+    type: 'workspace_list',
+    workspaces: [
+      { workspace_id: 'w1', label: 'the-space-name' },
+      { workspace_id: 'w9', label: 'some-other-space' },
+    ],
+  },
+}
+
+/** Answers agent.list and workspace.list; anything else falls to `rest`. */
+const herdrFixture =
+  (rest = () => ({ result: { type: 'ok' } })) =>
+  (req) =>
+    req.method === 'agent.list'
+      ? AGENT_LIST
+      : req.method === 'workspace.list'
+        ? WORKSPACE_LIST
+        : rest(req)
 
 test('a request without the Tailscale identity header is rejected', async () => {
   const fake = await fakeHerdr(() => AGENT_LIST)
@@ -278,8 +300,8 @@ test('unset ALLOWED_LOGIN fails closed and never touches the socket', async () =
   }
 })
 
-test('GET /api/agents projects and sorts the agent list', async () => {
-  const fake = await fakeHerdr(() => AGENT_LIST)
+test('GET /api/agents titles each agent with its space and sorts the list', async () => {
+  const fake = await fakeHerdr(herdrFixture())
   process.env.HERDR_SOCKET_PATH = fake.path
   process.env.ALLOWED_LOGIN = 'user@example.com'
   const app = await startServer()
@@ -289,16 +311,37 @@ test('GET /api/agents projects and sorts the agent list', async () => {
     const { agents } = await res.json()
     assert.equal(agents.length, 2)
     assert.equal(agents[0].pane_id, 'w2:p3', 'blocked sorts first')
+    assert.equal(agents[0].title, 'grok', 'a space with no label falls back to the agent name')
     assert.deepEqual(agents[1], {
       pane_id: 'w1:p1',
       agent: 'claude',
       status: 'idle',
-      title: 'Nice Title',
+      title: 'the-space-name',
       cwd: '/home/user/project',
       dir: 'project',
       state_change_seq: 7,
     })
-    assert.equal(fake.calls[0].method, 'agent.list')
+    assert.equal(fake.calls.some((c) => c.method === 'agent.list'), true)
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('GET /api/agents still lists agents when workspace.list fails', async () => {
+  const fake = await fakeHerdr((req) =>
+    req.method === 'agent.list'
+      ? AGENT_LIST
+      : { error: { code: 'invalid_request', message: 'unknown variant `workspace.list`' } }
+  )
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    const res = await fetch(`${app.url}/api/agents`, { headers: AUTH })
+    assert.equal(res.status, 200)
+    const { agents } = await res.json()
+    assert.equal(agents[1].title, 'Nice Title', 'falls back to the terminal title')
   } finally {
     await app.close()
     await fake.close()
@@ -410,7 +453,7 @@ test('GET feed with a matching hash returns unchanged and no body text', async (
   }
 })
 
-test('GET feed clamps lines and defaults recent to 200', async () => {
+test('GET feed clamps lines and defaults recent to 1000', async () => {
   const fake = await fakeHerdr((req) =>
     req.method === 'agent.list'
       ? AGENT_LIST
@@ -424,8 +467,8 @@ test('GET feed clamps lines and defaults recent to 200', async () => {
     await fetch(`${app.url}/api/agents/w2:p3/feed?source=recent&lines=9000`, { headers: AUTH })
     await fetch(`${app.url}/api/agents/w2:p3/feed?source=bogus`, { headers: AUTH })
     const reads = fake.calls.filter((c) => c.method === 'agent.read')
-    assert.equal(reads[0].params.lines, 200)
-    assert.equal(reads[1].params.lines, 500)
+    assert.equal(reads[0].params.lines, 1000)
+    assert.equal(reads[1].params.lines, 1000)
     assert.equal(reads[2].params.source, 'visible', 'an unknown source falls back rather than passing through')
   } finally {
     await app.close()

@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto'
  */
 export const ALLOWED_METHODS = new Set([
   'agent.list',
+  'workspace.list',
   'agent.read',
   'agent.prompt',
   'pane.send_input',
