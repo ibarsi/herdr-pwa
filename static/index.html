@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#181825" />
+    <title>Herdr</title>
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/icon-180.png" />
+    <style>
+      :root {
+        /* Replaced at runtime from GET /api/theme; these are catppuccin so the
+           shell is readable before the first fetch returns. */
+        --accent: #89b4fa;
+        --panel-bg: #181825;
+        --active-row-bg: #1e1e2e;
+        --surface0: #313244;
+        --surface1: #45475a;
+        --overlay0: #6c7086;
+        --text: #cdd6f4;
+        --subtext0: #a6adc8;
+        --mauve: #cba6f7;
+        --green: #a6e3a1;
+        --yellow: #f9e2af;
+        --red: #f38ba8;
+        --teal: #94e2d5;
+        --peach: #fab387;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        /* dvh, not vh: Safari's collapsing toolbar makes 100vh taller than the
+           visible viewport, which pushes the input off screen. */
+        height: 100dvh;
+        overflow: hidden;
+        background: var(--panel-bg);
+        color: var(--text);
+        font: 15px/1.45 ui-sans-serif, -apple-system, system-ui, sans-serif;
+        /* Stops pull-to-refresh from fighting the feed scroll. */
+        overscroll-behavior: none;
+      }
+
+      button { font: inherit; color: inherit; background: none; border: 0; }
+
+      .view { display: none; flex-direction: column; height: 100dvh; }
+      .view.active { display: flex; }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: max(env(safe-area-inset-top), 10px) 14px 10px;
+        background: var(--active-row-bg);
+        border-bottom: 1px solid var(--surface0);
+        flex: 0 0 auto;
+      }
+      header h1 { margin: 0; font-size: 17px; font-weight: 600; }
+      header .sub { color: var(--subtext0); font-size: 13px; }
+      .grow { flex: 1 1 auto; min-width: 0; }
+      .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+      .pill {
+        padding: 3px 9px;
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: 600;
+        background: var(--red);
+        color: var(--panel-bg);
+      }
+      .pill[hidden] { display: none; }
+
+      #error-bar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 10;
+        padding: max(env(safe-area-inset-top), 9px) 14px 9px;
+        background: var(--red);
+        color: var(--panel-bg);
+        font-size: 14px;
+      }
+      #error-bar[hidden] { display: none; }
+
+      #agent-list {
+        flex: 1 1 auto;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+        padding-bottom: env(safe-area-inset-bottom);
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        width: 100%;
+        padding: 13px 14px;
+        text-align: left;
+        border-bottom: 1px solid var(--surface0);
+        /* 44px is Apple's minimum comfortable tap target. */
+        min-height: 44px;
+      }
+      .row:active { background: var(--active-row-bg); }
+      .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+      .row .title { font-weight: 500; }
+      .row .dir { color: var(--mauve); font-size: 13px; }
+      .row .status { color: var(--subtext0); font-size: 12px; text-transform: uppercase; flex: 0 0 auto; }
+
+      /* Herdr's own status semantics, from the palette comments in state.rs. */
+      .s-blocked { background: var(--red); }
+      .s-working { background: var(--yellow); }
+      .s-idle    { background: var(--green); }
+      .s-done    { background: var(--blue, var(--accent)); }
+      .s-unknown { background: var(--overlay0); }
+
+      .empty { padding: 40px 20px; text-align: center; color: var(--subtext0); }
+
+      #feed {
+        flex: 1 1 auto;
+        margin: 0;
+        padding: 12px 14px;
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: var(--text);
+      }
+
+      #keys {
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        padding: 8px 14px;
+        border-top: 1px solid var(--surface0);
+        flex: 0 0 auto;
+      }
+      #keys button {
+        padding: 7px 12px;
+        border-radius: 7px;
+        background: var(--surface0);
+        font-size: 13px;
+        white-space: nowrap;
+        min-height: 36px;
+      }
+      #keys button:active { background: var(--surface1); }
+
+      #composer {
+        display: flex;
+        gap: 8px;
+        padding: 8px 14px calc(8px + env(safe-area-inset-bottom));
+        border-top: 1px solid var(--surface0);
+        background: var(--active-row-bg);
+        flex: 0 0 auto;
+      }
+      #composer textarea {
+        flex: 1 1 auto;
+        resize: none;
+        max-height: 120px;
+        padding: 9px 11px;
+        border: 1px solid var(--surface1);
+        border-radius: 9px;
+        background: var(--panel-bg);
+        color: var(--text);
+        /* 16px or larger, or iOS zooms the page when the field takes focus. */
+        font: 16px/1.35 ui-sans-serif, -apple-system, system-ui, sans-serif;
+      }
+      #composer button {
+        padding: 0 16px;
+        border-radius: 9px;
+        background: var(--accent);
+        color: var(--panel-bg);
+        font-weight: 600;
+      }
+      #composer button:disabled { opacity: 0.4; }
+    </style>
+  </head>
+  <body>
+    <div id="error-bar" hidden></div>
+    <section id="list-view" class="view active">
+      <header>
+        <h1 class="grow">Agents</h1>
+        <span id="blocked-pill" class="pill" hidden></span>
+      </header>
+      <div id="agent-list"></div>
+    </section>
+
+    <section id="feed-view" class="view">
+      <header>
+        <button id="back" aria-label="Back to agents">&larr;</button>
+        <div class="grow truncate">
+          <div id="feed-title" class="truncate"></div>
+          <div id="feed-sub" class="sub truncate"></div>
+        </div>
+        <button id="toggle-source" class="pill" style="background: var(--surface0); color: var(--text)">
+          recent
+        </button>
+        <button id="focus-btn" aria-label="Focus on desktop">&#9673;</button>
+      </header>
+      <pre id="feed"></pre>
+      <div id="keys"></div>
+      <form id="composer">
+        <textarea
+          id="text"
+          rows="1"
+          placeholder="Reply…"
+          autocapitalize="off"
+          autocorrect="off"
+          autocomplete="off"
+          spellcheck="false"
+        ></textarea>
+        <button id="send" type="submit" disabled>Send</button>
+      </form>
+    </section>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

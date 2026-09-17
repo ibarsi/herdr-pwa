@@ -1,0 +1,632 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import net from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { writeFileSync } from 'node:fs'
+import { herdr, HerdrError } from './herdr.js'
+import { cleanFeed, hashFeed } from './feed.js'
+import { parseColor, resolveTheme, loadTheme } from './theme.js'
+import { createServer } from './server.js'
+
+let sockSeq = 0
+
+/**
+ * Stands up a fake Herdr speaking NDJSON on a Unix socket.
+ * `handler(req)` returns the object merged into `{id}` for the response,
+ * e.g. `{result: {...}}` or `{error: {code, message}}`. Returning
+ * `undefined` sends nothing, which exercises the timeout path.
+ * Returns `{path, calls, close}` — `calls` accumulates every parsed request.
+ */
+async function fakeHerdr(handler) {
+  const path = join(tmpdir(), `herdr-test-${process.pid}-${sockSeq++}.sock`)
+  const calls = []
+  const sockets = new Set()
+  const server = net.createServer((sock) => {
+    sockets.add(sock)
+    sock.on('close', () => sockets.delete(sock))
+    sock.on('error', () => {})
+    let buf = ''
+    sock.on('data', (chunk) => {
+      buf += chunk
+      let i
+      while ((i = buf.indexOf('\n')) !== -1) {
+        const req = JSON.parse(buf.slice(0, i))
+        buf = buf.slice(i + 1)
+        calls.push(req)
+        const res = handler(req)
+        if (res !== undefined) sock.write(JSON.stringify({ id: req.id, ...res }) + '\n')
+      }
+    })
+  })
+  await new Promise((resolve) => server.listen(path, resolve))
+  return {
+    path,
+    calls,
+    close: () =>
+      new Promise((resolve) => {
+        for (const s of sockets) s.destroy()
+        server.close(resolve)
+      }),
+  }
+}
+
+test('herdr sends the method and params and returns result', async () => {
+  const fake = await fakeHerdr((req) => ({ result: { type: 'agent_list', agents: [{ pane_id: 'w1:p1' }] } }))
+  process.env.HERDR_SOCKET_PATH = fake.path
+  try {
+    const result = await herdr('agent.list', {})
+    assert.deepEqual(result.agents, [{ pane_id: 'w1:p1' }])
+    assert.equal(fake.calls.length, 1)
+    assert.equal(fake.calls[0].method, 'agent.list')
+    assert.ok(fake.calls[0].id, 'request carries an id')
+  } finally {
+    await fake.close()
+  }
+})
+
+test('herdr refuses a method outside the allowlist without opening a socket', async () => {
+  const fake = await fakeHerdr(() => ({ result: {} }))
+  process.env.HERDR_SOCKET_PATH = fake.path
+  try {
+    await assert.rejects(() => herdr('pane.split', { argv: ['sh'] }), (e) => {
+      assert.ok(e instanceof HerdrError)
+      assert.equal(e.code, 'method_not_allowed')
+      return true
+    })
+    assert.equal(fake.calls.length, 0, 'nothing was written to the socket')
+  } finally {
+    await fake.close()
+  }
+})
+
+test('herdr turns a Herdr error response into a HerdrError with its code', async () => {
+  const fake = await fakeHerdr(() => ({ error: { code: 'agent_not_found', message: 'no such agent' } }))
+  process.env.HERDR_SOCKET_PATH = fake.path
+  try {
+    await assert.rejects(() => herdr('agent.focus', { target: 'w9:p9' }), (e) => {
+      assert.equal(e.code, 'agent_not_found')
+      assert.equal(e.message, 'no such agent')
+      return true
+    })
+  } finally {
+    await fake.close()
+  }
+})
+
+test('herdr reports a missing socket as socket_unavailable', async () => {
+  process.env.HERDR_SOCKET_PATH = join(tmpdir(), 'herdr-test-does-not-exist.sock')
+  await assert.rejects(() => herdr('agent.list', {}), (e) => {
+    assert.equal(e.code, 'socket_unavailable')
+    return true
+  })
+})
+
+test('herdr times out when Herdr never answers', async () => {
+  const fake = await fakeHerdr(() => undefined)
+  process.env.HERDR_SOCKET_PATH = fake.path
+  try {
+    await assert.rejects(() => herdr('agent.list', {}, { timeout: 50 }), (e) => {
+      assert.equal(e.code, 'timeout')
+      return true
+    })
+  } finally {
+    await fake.close()
+  }
+})
+
+test('cleanFeed drops long rule lines and keeps footer text', () => {
+  const input = [
+    'Here is some output.',
+    '────────────────────────────────────────',
+    '━━━━━━━━━━━━━━━━━━━━━━━━',
+    '--------------------',
+    'Opus 5 - herdr-pwa - master - 65%',
+  ].join('\n')
+  assert.equal(cleanFeed(input), 'Here is some output.\nOpus 5 - herdr-pwa - master - 65%')
+})
+
+test('cleanFeed keeps short rules and rules mixed with text', () => {
+  const input = ['-----', 'a ──────────────────────────── b'].join('\n')
+  assert.equal(cleanFeed(input), input)
+})
+
+test('cleanFeed collapses blank runs and right-strips lines', () => {
+  assert.equal(cleanFeed('a   \n\n\n\nb\t\n'), 'a\n\nb')
+})
+
+test('hashFeed is stable, short, and url-safe', () => {
+  const h = hashFeed('hello')
+  assert.equal(h.length, 16)
+  assert.match(h, /^[A-Za-z0-9_-]{16}$/)
+  assert.equal(h, hashFeed('hello'))
+  assert.notEqual(h, hashFeed('hello '))
+})
+
+test('parseColor handles every form Herdr accepts', () => {
+  assert.equal(parseColor('#89b4fa'), '#89b4fa')
+  assert.equal(parseColor('#ABC'), '#aabbcc')
+  assert.equal(parseColor('rgb(137, 180, 250)'), '#89b4fa')
+  assert.equal(parseColor('black'), '#000000')
+  assert.equal(parseColor('DarkGrey'), '#7f7f7f')
+  assert.equal(parseColor('reset'), null)
+  assert.equal(parseColor('transparent'), null)
+  assert.equal(parseColor('wat'), '#00cdcd') // Herdr's own unknown-colour fallback
+})
+
+test('resolveTheme returns the named palette', () => {
+  const { name, colors } = resolveTheme('[theme]\nname = "dracula"\n')
+  assert.equal(name, 'dracula')
+  assert.equal(Object.keys(colors).length, 19)
+  assert.match(colors.text, /^#[0-9a-f]{6}$/)
+})
+
+test('resolveTheme applies theme.custom over the base palette', () => {
+  const base = resolveTheme('[theme]\nname = "catppuccin"\n').colors
+  const { colors } = resolveTheme(
+    '[theme]\n# a comment\nname = "catppuccin"\nauto_switch = false\n[theme.custom]\npanel_bg = "black"\n'
+  )
+  assert.equal(colors.panel_bg, '#000000')
+  assert.equal(colors.text, base.text, 'untouched tokens keep the base value')
+})
+
+test('resolveTheme stops reading custom at the next section', () => {
+  const { colors } = resolveTheme(
+    '[theme]\nname = "catppuccin"\n[theme.custom]\naccent = "#ff0000"\n[ui]\naccent = "blue"\n'
+  )
+  assert.equal(colors.accent, '#ff0000')
+})
+
+test('resolveTheme maps the terminal theme onto catppuccin', () => {
+  const { name, colors } = resolveTheme('[theme]\nname = "terminal"\n')
+  assert.equal(name, 'catppuccin')
+  assert.equal(colors.text, resolveTheme('[theme]\nname = "catppuccin"\n').colors.text)
+})
+
+test('resolveTheme understands Herdr name aliases and unknown names', () => {
+  assert.equal(resolveTheme('[theme]\nname = "tokyonight"\n').name, 'tokyo-night')
+  assert.equal(resolveTheme('[theme]\nname = "catppuccin_latte"\n').name, 'catppuccin-latte')
+  assert.equal(resolveTheme('[theme]\nname = "nonsense"\n').name, 'catppuccin')
+  assert.equal(resolveTheme('').name, 'catppuccin')
+})
+
+test('resolveTheme preserves reset tokens as null', () => {
+  assert.equal(resolveTheme('[theme]\nname = "catppuccin"\n').colors.sidebar_bg, null)
+})
+
+test('loadTheme falls back to catppuccin when the config is unreadable', () => {
+  process.env.HERDR_CONFIG_PATH = join(tmpdir(), 'herdr-test-no-such-config.toml')
+  assert.equal(loadTheme().name, 'catppuccin')
+})
+
+test('loadTheme reads the configured file', () => {
+  const path = join(tmpdir(), `herdr-test-config-${process.pid}.toml`)
+  writeFileSync(path, '[theme]\nname = "nord"\n')
+  process.env.HERDR_CONFIG_PATH = path
+  assert.equal(loadTheme().name, 'nord')
+})
+
+/** Starts the adapter on an ephemeral port. Returns `{url, close}`. */
+async function startServer() {
+  const server = createServer()
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+  return {
+    url: `http://127.0.0.1:${port}`,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  }
+}
+
+const AUTH = { 'Tailscale-User-Login': 'user@example.com' }
+
+const AGENT_LIST = {
+  result: {
+    type: 'agent_list',
+    agents: [
+      {
+        pane_id: 'w1:p1',
+        agent: 'claude',
+        agent_status: 'idle',
+        cwd: '/home/user/project',
+        terminal_title: 'raw title',
+        terminal_title_stripped: 'Nice Title',
+        state_change_seq: 7,
+        unknown_future_field: 'ignored',
+      },
+      {
+        pane_id: 'w2:p3',
+        agent: 'grok',
+        agent_status: 'blocked',
+        cwd: '/home/user/herdr-pwa',
+        state_change_seq: 9,
+      },
+    ],
+  },
+}
+
+test('a request without the Tailscale identity header is rejected', async () => {
+  const fake = await fakeHerdr(() => AGENT_LIST)
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  delete process.env.DEV_BYPASS_AUTH
+  const app = await startServer()
+  try {
+    assert.equal((await fetch(`${app.url}/api/agents`)).status, 403)
+    const wrong = await fetch(`${app.url}/api/agents`, {
+      headers: { 'Tailscale-User-Login': 'someone@else.com' },
+    })
+    assert.equal(wrong.status, 403)
+    assert.equal(fake.calls.length, 0, 'an unauthenticated request never reaches herdr')
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('unset ALLOWED_LOGIN fails closed and never touches the socket', async () => {
+  const fake = await fakeHerdr(() => AGENT_LIST)
+  process.env.HERDR_SOCKET_PATH = fake.path
+  delete process.env.ALLOWED_LOGIN
+  delete process.env.DEV_BYPASS_AUTH
+  const app = await startServer()
+  try {
+    assert.equal((await fetch(`${app.url}/api/agents`)).status, 403)
+    assert.equal(fake.calls.length, 0, 'an unauthenticated request never reaches herdr')
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('GET /api/agents projects and sorts the agent list', async () => {
+  const fake = await fakeHerdr(() => AGENT_LIST)
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    const res = await fetch(`${app.url}/api/agents`, { headers: AUTH })
+    assert.equal(res.status, 200)
+    const { agents } = await res.json()
+    assert.equal(agents.length, 2)
+    assert.equal(agents[0].pane_id, 'w2:p3', 'blocked sorts first')
+    assert.deepEqual(agents[1], {
+      pane_id: 'w1:p1',
+      agent: 'claude',
+      status: 'idle',
+      title: 'Nice Title',
+      cwd: '/home/user/project',
+      dir: 'project',
+      state_change_seq: 7,
+    })
+    assert.equal(fake.calls[0].method, 'agent.list')
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('an unknown path returns 404 and never touches the socket', async () => {
+  const fake = await fakeHerdr(() => AGENT_LIST)
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    for (const p of ['/api/pane.split', '/api/nope', '/api/agents/w1:p1/split']) {
+      assert.equal((await fetch(`${app.url}${p}`, { headers: AUTH })).status, 404, p)
+    }
+    assert.equal(fake.calls.length, 0)
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('a missing Herdr socket surfaces as 503', async () => {
+  process.env.HERDR_SOCKET_PATH = join(tmpdir(), 'herdr-test-absent.sock')
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    const res = await fetch(`${app.url}/api/agents`, { headers: AUTH })
+    assert.equal(res.status, 503)
+    assert.equal((await res.json()).error.code, 'socket_unavailable')
+  } finally {
+    await app.close()
+  }
+})
+
+test('the app shell is served and also requires auth', async () => {
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    assert.equal((await fetch(`${app.url}/`)).status, 403)
+    const res = await fetch(`${app.url}/`, { headers: AUTH })
+    assert.equal(res.status, 200)
+    assert.match(res.headers.get('content-type'), /text\/html/)
+  } finally {
+    await app.close()
+  }
+})
+
+test('static serving cannot escape the static directory', async () => {
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    const res = await fetch(`${app.url}/../server.js`, { headers: AUTH })
+    assert.equal(res.status, 404)
+  } finally {
+    await app.close()
+  }
+})
+
+test('GET feed returns cleaned text, a hash, and the current status', async () => {
+  const fake = await fakeHerdr((req) =>
+    req.method === 'agent.list'
+      ? AGENT_LIST
+      : { result: { type: 'pane_read', read: { text: 'hello\n────────────────────────────\nworld', truncated: false } } }
+  )
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    const res = await fetch(`${app.url}/api/agents/w2:p3/feed`, { headers: AUTH })
+    assert.equal(res.status, 200)
+    const body = await res.json()
+    assert.equal(body.text, 'hello\nworld')
+    assert.equal(body.status, 'blocked')
+    assert.equal(body.truncated, false)
+    assert.equal(body.hash, hashFeed('hello\nworld'))
+
+    const read = fake.calls.find((c) => c.method === 'agent.read')
+    assert.equal(read.params.target, 'w2:p3')
+    assert.equal(read.params.source, 'visible')
+    assert.equal(read.params.strip_ansi, true)
+    assert.equal(read.params.lines, 60)
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('GET feed with a matching hash returns unchanged and no body text', async () => {
+  const text = 'stable output'
+  const fake = await fakeHerdr((req) =>
+    req.method === 'agent.list'
+      ? AGENT_LIST
+      : { result: { type: 'pane_read', read: { text, truncated: false } } }
+  )
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    const h = hashFeed(text)
+    const same = await (await fetch(`${app.url}/api/agents/w2:p3/feed?h=${h}`, { headers: AUTH })).json()
+    assert.deepEqual(same, { unchanged: true, hash: h, status: 'blocked' })
+
+    const differs = await (await fetch(`${app.url}/api/agents/w2:p3/feed?h=nope`, { headers: AUTH })).json()
+    assert.equal(differs.text, text)
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('GET feed clamps lines and defaults recent to 200', async () => {
+  const fake = await fakeHerdr((req) =>
+    req.method === 'agent.list'
+      ? AGENT_LIST
+      : { result: { type: 'pane_read', read: { text: 'x', truncated: true } } }
+  )
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    await fetch(`${app.url}/api/agents/w2:p3/feed?source=recent`, { headers: AUTH })
+    await fetch(`${app.url}/api/agents/w2:p3/feed?source=recent&lines=9000`, { headers: AUTH })
+    await fetch(`${app.url}/api/agents/w2:p3/feed?source=bogus`, { headers: AUTH })
+    const reads = fake.calls.filter((c) => c.method === 'agent.read')
+    assert.equal(reads[0].params.lines, 200)
+    assert.equal(reads[1].params.lines, 500)
+    assert.equal(reads[2].params.source, 'visible', 'an unknown source falls back rather than passing through')
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('GET feed for an agent that has ended returns 404 without reading', async () => {
+  const fake = await fakeHerdr(() => AGENT_LIST)
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    const res = await fetch(`${app.url}/api/agents/w9:p9/feed`, { headers: AUTH })
+    assert.equal(res.status, 404)
+    assert.equal(fake.calls.filter((c) => c.method === 'agent.read').length, 0)
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+/** POSTs JSON to the adapter with the identity header attached. */
+function post(url, body) {
+  return fetch(url, {
+    method: 'POST',
+    headers: { ...AUTH, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+test('send to a blocked agent uses pane.send_input with enter', async () => {
+  const fake = await fakeHerdr((req) => (req.method === 'agent.list' ? AGENT_LIST : { result: { type: 'ok' } }))
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    const res = await post(`${app.url}/api/agents/w2:p3/send`, { text: 'yes' })
+    assert.equal(res.status, 200)
+    assert.equal((await res.json()).via, 'pane.send_input')
+    assert.equal(fake.calls.filter((c) => c.method === 'agent.prompt').length, 0)
+    const sent = fake.calls.find((c) => c.method === 'pane.send_input')
+    assert.deepEqual(sent.params, { pane_id: 'w2:p3', text: 'yes', keys: ['enter'] })
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('send to an idle agent uses agent.prompt', async () => {
+  const fake = await fakeHerdr((req) => (req.method === 'agent.list' ? AGENT_LIST : { result: { type: 'ok' } }))
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    const res = await post(`${app.url}/api/agents/w1:p1/send`, { text: 'run the tests' })
+    assert.equal((await res.json()).via, 'agent.prompt')
+    const sent = fake.calls.find((c) => c.method === 'agent.prompt')
+    assert.deepEqual(sent.params, { target: 'w1:p1', text: 'run the tests' })
+    assert.equal(fake.calls.filter((c) => c.method === 'pane.send_input').length, 0)
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('send retries via pane.send_input when the agent blocks mid-flight', async () => {
+  const fake = await fakeHerdr((req) => {
+    if (req.method === 'agent.list') return AGENT_LIST
+    if (req.method === 'agent.prompt')
+      return { error: { code: 'agent_blocked', message: 'agent w1:p1 is blocked' } }
+    return { result: { type: 'ok' } }
+  })
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    const res = await post(`${app.url}/api/agents/w1:p1/send`, { text: 'ok' })
+    assert.equal(res.status, 200)
+    assert.equal((await res.json()).via, 'pane.send_input')
+    const retry = fake.calls.find((c) => c.method === 'pane.send_input')
+    assert.deepEqual(retry.params, { pane_id: 'w1:p1', text: 'ok', keys: ['enter'] })
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('send surfaces a non-blocked prompt error rather than retrying', async () => {
+  const fake = await fakeHerdr((req) => {
+    if (req.method === 'agent.list') return AGENT_LIST
+    return { error: { code: 'agent_not_ready', message: 'still starting' } }
+  })
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    const res = await post(`${app.url}/api/agents/w1:p1/send`, { text: 'ok' })
+    assert.equal(res.status, 409)
+    assert.equal(fake.calls.filter((c) => c.method === 'pane.send_input').length, 0)
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('send to a pane absent from agent.list is 404 and writes nothing', async () => {
+  const fake = await fakeHerdr(() => AGENT_LIST)
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    const res = await post(`${app.url}/api/agents/w9:p9/send`, { text: 'hello' })
+    assert.equal(res.status, 404)
+    assert.equal(fake.calls.every((c) => c.method === 'agent.list'), true)
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('send rejects empty text before opening a socket', async () => {
+  const fake = await fakeHerdr(() => AGENT_LIST)
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    for (const body of [{ text: '' }, { text: '   \n' }, {}]) {
+      const res = await post(`${app.url}/api/agents/w1:p1/send`, body)
+      assert.equal(res.status, 400, JSON.stringify(body))
+    }
+    assert.equal(fake.calls.length, 0)
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('keys sends the palette keys through pane.send_input', async () => {
+  const fake = await fakeHerdr((req) => (req.method === 'agent.list' ? AGENT_LIST : { result: { type: 'ok' } }))
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    const res = await post(`${app.url}/api/agents/w2:p3/keys`, { keys: ['down', 'enter'] })
+    assert.equal(res.status, 200)
+    const sent = fake.calls.find((c) => c.method === 'pane.send_input')
+    assert.deepEqual(sent.params, { pane_id: 'w2:p3', keys: ['down', 'enter'] })
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('keys outside the palette are rejected without touching the socket', async () => {
+  const fake = await fakeHerdr(() => AGENT_LIST)
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    for (const keys of [['ctrl+alt+delete'], [], ['enter', 'f1'], 'enter']) {
+      const res = await post(`${app.url}/api/agents/w2:p3/keys`, { keys })
+      assert.equal(res.status, 400, JSON.stringify(keys))
+    }
+    assert.equal(fake.calls.length, 0)
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('focus calls agent.focus for a live agent', async () => {
+  const fake = await fakeHerdr((req) => (req.method === 'agent.list' ? AGENT_LIST : { result: { type: 'ok' } }))
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const app = await startServer()
+  try {
+    assert.equal((await post(`${app.url}/api/agents/w1:p1/focus`, {})).status, 200)
+    assert.deepEqual(fake.calls.find((c) => c.method === 'agent.focus').params, { target: 'w1:p1' })
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
+
+test('GET /api/theme serves the resolved palette and never touches the socket', async () => {
+  const fake = await fakeHerdr(() => AGENT_LIST)
+  process.env.HERDR_SOCKET_PATH = fake.path
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  const path = join(tmpdir(), `herdr-test-theme-${process.pid}.toml`)
+  writeFileSync(path, '[theme]\nname = "catppuccin"\n[theme.custom]\npanel_bg = "black"\n')
+  process.env.HERDR_CONFIG_PATH = path
+  const app = await startServer()
+  try {
+    const body = await (await fetch(`${app.url}/api/theme`, { headers: AUTH })).json()
+    assert.equal(body.name, 'catppuccin')
+    assert.equal(body.colors.panel_bg, '#000000')
+    assert.equal(body.colors.text, '#cdd6f4')
+    assert.equal(fake.calls.length, 0)
+  } finally {
+    await app.close()
+    await fake.close()
+  }
+})
