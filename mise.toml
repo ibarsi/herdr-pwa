@@ -1,0 +1,105 @@
+[tools]
+node = "26"
+
+[env]
+HERDR_SOCKET_PATH = "{{env.HOME}}/.config/herdr/herdr.sock"
+HERDR_CONFIG_PATH = "{{env.HOME}}/.config/herdr/config.toml"
+PORT = "8787"
+
+# =============================================================================
+# Local development
+# =============================================================================
+
+[tasks.test]
+description = "Run the node:test suite"
+alias = "t"
+run = "node --test"
+
+[tasks.dev]
+description = "Foreground adapter on 127.0.0.1:8787 with Tailscale auth bypass"
+alias = "d"
+env = { DEV_BYPASS_AUTH = "1" }
+run = "node server.js"
+
+[tasks.smoke]
+description = "GET /api/agents against a running adapter (bypass or identity header)"
+run = """
+set -a
+[ -f .env ] && . ./.env
+set +a
+if [ "${DEV_BYPASS_AUTH:-}" = 1 ]; then
+  curl -sS http://127.0.0.1:${PORT}/api/agents
+else
+  if [ -z "${ALLOWED_LOGIN:-}" ]; then
+    echo "Set ALLOWED_LOGIN (copy .env.example to .env)" >&2
+    exit 1
+  fi
+  curl -sS -H "Tailscale-User-Login: ${ALLOWED_LOGIN}" http://127.0.0.1:${PORT}/api/agents
+fi
+echo
+"""
+
+# =============================================================================
+# Phone / production-shaped run
+# =============================================================================
+
+[tasks.up]
+description = "Build and start compose on 127.0.0.1:8787 (auth on)"
+run = """
+set -a
+[ -f .env ] && . ./.env
+set +a
+export HERDR_UID="${HERDR_UID:-$(id -u)}"
+export HERDR_GID="${HERDR_GID:-$(id -g)}"
+if [ -z "${ALLOWED_LOGIN:-}" ]; then
+  echo "Set ALLOWED_LOGIN (copy .env.example to .env)" >&2
+  exit 1
+fi
+docker compose up -d --build
+"""
+
+[tasks.down]
+description = "Stop the compose service"
+run = "docker compose down"
+
+[tasks.logs]
+description = "Follow compose logs"
+run = "docker compose logs -f"
+
+[tasks.serve]
+description = "Publish 127.0.0.1:8787 on the tailnet via Tailscale Serve"
+run = "tailscale serve --bg 8787 && tailscale serve status"
+
+[tasks."serve:off"]
+description = "Clear Tailscale Serve config on this node"
+run = "tailscale serve reset"
+
+[tasks.phone]
+description = "Compose up + Tailscale Serve, then print the Safari URL"
+run = """
+mise run up
+mise run serve
+dns=$(tailscale status --json | node -e "
+  let s = ''
+  process.stdin.on('data', (c) => { s += c })
+  process.stdin.on('end', () => {
+    const name = JSON.parse(s).Self?.DNSName || ''
+    process.stdout.write(name.replace(/\\.$/, ''))
+  })
+")
+echo
+echo "On the iPhone, with Tailscale connected:"
+echo "  1. Open https://${dns} in Safari (not Chrome or Firefox)"
+echo "  2. Share → Add to Home Screen"
+echo "  3. Launch from the home screen and confirm agents load"
+echo
+echo "Stop with:  mise down && mise serve:off"
+"""
+
+[tasks.status]
+description = "Show compose and Tailscale Serve status"
+run = """
+docker compose ps || true
+echo
+tailscale serve status || true
+"""
