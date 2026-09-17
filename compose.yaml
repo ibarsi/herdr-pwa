@@ -1,0 +1,22 @@
+services:
+  herdr-pwa:
+    build: .
+    container_name: herdr-pwa
+    # Herdr's socket is mode 0600. The container uid must match the socket owner
+    # or every connection fails with EACCES. Override via HERDR_UID / HERDR_GID.
+    user: "${HERDR_UID:-1000}:${HERDR_GID:-1000}"
+    # Loopback only. Tailscale Serve is the sole ingress; binding 0.0.0.0 on the
+    # host would publish the adapter to the LAN with no authentication in front.
+    ports:
+      - "127.0.0.1:8787:8787"
+    # Directory mount, not the socket file: a file-mount pins the inode across Herdr restarts.
+    volumes:
+      - ${HOME}/.config/herdr:/herdr:ro
+    environment:
+      HERDR_SOCKET_PATH: /herdr/herdr.sock
+      HERDR_CONFIG_PATH: /herdr/config.toml
+      # Listen on all interfaces inside the container so docker-proxy can reach
+      # the process; the host publish above stays 127.0.0.1-only.
+      BIND_HOST: "0.0.0.0"
+      ALLOWED_LOGIN: ${ALLOWED_LOGIN:?Set ALLOWED_LOGIN in .env — see .env.example}
+    restart: unless-stopped

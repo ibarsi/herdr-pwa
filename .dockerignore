@@ -1,0 +1,8 @@
+.git
+node_modules
+docs
+tools
+test.js
+README.md
+compose.yaml
+Dockerfile
