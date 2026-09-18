@@ -8,6 +8,7 @@ import { herdr, HerdrError } from './herdr.js'
 import { cleanFeed, hashFeed } from './feed.js'
 import { parseColor, resolveTheme, loadTheme } from './theme.js'
 import { createServer } from './server.js'
+import { classifyLine } from './static/lines.js'
 
 let sockSeq = 0
 
@@ -204,6 +205,38 @@ test('loadTheme reads the configured file', () => {
   writeFileSync(path, '[theme]\nname = "nord"\n')
   process.env.HERDR_CONFIG_PATH = path
   assert.equal(loadTheme().name, 'nord')
+})
+
+test('classifyLine reads the glyphs claude and grok actually print', () => {
+  // Samples taken verbatim from live panes.
+  const cases = [
+    ['❯ commit and push', 'you'],
+    ['● Pushed. beb31a7..352a656 on origin/main', 'head'],
+    ['  ⎿ ran 1 shell command', 'aux'],
+    ['◆ Thought for 2.4s', 'head'],
+    ['┃ The user wants me to continue the /ship process', 'dim'],
+    ['✻ Cooked for 3m 23s · done 6:14 PM', 'dim'],
+    ['$ git rev-parse --abbrev-ref HEAD', 'cmd'],
+    ['  … +12 lines', 'dim'],
+    ['  │ migration-cohorts (idle) │ 996 │', 'aux'],
+    ['Reading the failing activity and test sites.', ''],
+    ['', ''],
+  ]
+  for (const [line, expected] of cases) {
+    assert.equal(classifyLine(line), expected, JSON.stringify(line))
+  }
+})
+
+test('classifyLine flags failures without reddening prose that mentions them', () => {
+  assert.equal(classifyLine('FAIL: 3 tests failed'), 'bad')
+  assert.equal(classifyLine('  ✗ assertion failed'), 'bad')
+  assert.equal(classifyLine('  ⎿ Error: connection refused'), 'bad')
+
+  // The words appear mid-sentence constantly; only line-start markers count.
+  assert.equal(classifyLine('● That error is handled by the retry path'), 'head')
+  assert.equal(classifyLine('Added error handling to the parser'), '')
+  // Your own turn keeps its colour even when you are reporting a failure.
+  assert.equal(classifyLine('❯ fix the failing test'), 'you')
 })
 
 /** Starts the adapter on an ephemeral port. Returns `{url, close}`. */

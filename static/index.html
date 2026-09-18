@@ -132,6 +132,24 @@
         color: var(--text);
       }
 
+      /* Herdr returns the cell grid with every SGR attribute dropped, so none
+         of this is the agent's own colour — it is inferred from the glyphs the
+         agents print, and spent out of the theme tokens so it tracks whatever
+         palette Herdr is configured with, light ones included. */
+      #feed .l-you  { color: var(--mauve); font-weight: 600; }
+      #feed .l-head { color: var(--blue, var(--accent)); }
+      #feed .l-cmd  { color: var(--green); }
+      #feed .l-aux  { color: var(--subtext0); }
+      #feed .l-dim  { color: var(--overlay0); }
+      #feed .l-bad  { color: var(--red); }
+
+      /* The status accent: visible without reading a word of the feed. */
+      #feed-view[data-status] header { border-bottom-width: 2px; }
+      #feed-view[data-status='blocked'] header { border-bottom-color: var(--red); }
+      #feed-view[data-status='working'] header { border-bottom-color: var(--yellow); }
+      #feed-view[data-status='idle']    header { border-bottom-color: var(--green); }
+      #feed-view[data-status='done']    header { border-bottom-color: var(--blue, var(--accent)); }
+
       #keys {
         display: flex;
         gap: 6px;

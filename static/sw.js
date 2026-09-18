@@ -1,5 +1,5 @@
-const CACHE = 'herdr-shell-v1'
-const SHELL = ['/', '/app.js', '/manifest.json', '/icon-192.png', '/icon-512.png']
+const CACHE = 'herdr-shell-v2'
+const SHELL = ['/', '/app.js', '/lines.js', '/manifest.json', '/icon-192.png', '/icon-512.png']
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()))

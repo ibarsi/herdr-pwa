@@ -1,3 +1,5 @@
+import { classifyLine } from './lines.js'
+
 const $ = (id) => document.getElementById(id)
 
 const LIST_POLL_MS = 3000
@@ -8,6 +10,38 @@ const state = {
   source: 'recent', // scrollback by default; the screen alone has nothing to scroll
   hash: null,
   timer: null,
+}
+
+/**
+ * Paints the feed one line at a time.
+ *
+ * Still textContent per line, never innerHTML — this is terminal output and a
+ * pane title or a file name in it may contain anything. Plain lines stay bare
+ * text nodes rather than spans: they are the majority, and wrapping them would
+ * multiply the node count of a 1000-line feed to no visible end.
+ */
+function renderFeed(feed, text) {
+  const frag = document.createDocumentFragment()
+  for (const line of text.split('\n')) {
+    const cls = classifyLine(line)
+    if (!cls) {
+      frag.append(`${line}\n`)
+      continue
+    }
+    const span = document.createElement('span')
+    span.className = `l-${cls}`
+    span.textContent = `${line}\n`
+    frag.append(span)
+  }
+  feed.textContent = ''
+  feed.append(frag)
+}
+
+/** Status drives the subtitle and the header's accent colour together. */
+function setFeedStatus(status) {
+  state.agent.status = status
+  $('feed-view').dataset.status = status
+  $('feed-sub').textContent = `${state.agent.agent} · ${state.agent.dir} · ${status}`
 }
 
 /** Labels the toggle with the source it switches *to*. */
@@ -136,10 +170,7 @@ async function pollFeed() {
     const body = await api(`/api/agents/${pane}/feed?${query}`)
     showError('')
 
-    if (body.status && body.status !== state.agent.status) {
-      state.agent.status = body.status
-      $('feed-sub').textContent = `${state.agent.agent} · ${state.agent.dir} · ${body.status}`
-    }
+    if (body.status && body.status !== state.agent.status) setFeedStatus(body.status)
 
     // The server downgrades to the screen when a working agent has no
     // capturable history, so the label follows the answer, not the request.
@@ -149,8 +180,7 @@ async function pollFeed() {
 
     const feed = $('feed')
     const follow = atBottom(feed)
-    // textContent, never innerHTML — this is raw terminal output.
-    feed.textContent = body.text
+    renderFeed(feed, body.text)
     state.hash = body.hash
     // Only snap to the tail if the user was already there; otherwise they are
     // reading something and yanking the scroll away is infuriating.
@@ -171,7 +201,7 @@ export function showFeed(agent) {
   state.hash = null
 
   $('feed-title').textContent = agent.title
-  $('feed-sub').textContent = `${agent.agent} · ${agent.dir} · ${agent.status}`
+  setFeedStatus(agent.status)
   $('feed').textContent = ''
   setSourceLabel(state.source)
 
