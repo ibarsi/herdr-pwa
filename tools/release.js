@@ -158,7 +158,15 @@ function main(args) {
   }
 
   if (args[0] === '--notes') {
-    const notes = readNotes(readFileSync(changelogPath, 'utf8'), args[1])
+    // A missing file is the same outcome as a missing section: there are no
+    // notes to publish. An uncaught ENOENT would hide which version was asked for.
+    let changelog = ''
+    try {
+      changelog = readFileSync(changelogPath, 'utf8')
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err
+    }
+    const notes = readNotes(changelog, args[1])
     if (notes === null) fail(`no changelog section for ${args[1]}`)
     return console.log(notes)
   }
