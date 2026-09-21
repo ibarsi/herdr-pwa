@@ -52,7 +52,7 @@ run = "node tools/release.js"
 # =============================================================================
 
 [tasks.up]
-description = "Build and start compose on 127.0.0.1:8787 (auth on)"
+description = "Pull the released image and start compose on 127.0.0.1:8787 (auth on)"
 run = """
 set -a
 [ -f .env ] && . ./.env
@@ -63,8 +63,13 @@ if [ -z "${ALLOWED_LOGIN:-}" ]; then
   echo "Set ALLOWED_LOGIN (copy .env.example to .env)" >&2
   exit 1
 fi
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 """
+
+[tasks.build]
+description = "Build the container image locally, to test Dockerfile changes"
+run = "docker build -t herdr-pwa:dev ."
 
 [tasks.down]
 description = "Stop the compose service"
