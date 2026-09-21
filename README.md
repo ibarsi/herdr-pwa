@@ -47,7 +47,7 @@ devices on the tailnet do not get that header and are refused.
 
        mise phone
 
-   That builds and starts compose (`127.0.0.1:8787`) and runs
+   That pulls the released image, starts compose (`127.0.0.1:8787`), and runs
    `tailscale serve --bg 8787`. It prints this node's MagicDNS URL.
 3. On the **iPhone**, connect Tailscale.
 4. Open **Safari** (Add to Home Screen does not exist in Chrome or Firefox on
@@ -73,6 +73,39 @@ Useful extras: `mise logs`, `mise status`.
 
 `mise smoke` against compose needs no `DEV_BYPASS_AUTH` — it sends
 `Tailscale-User-Login` from `ALLOWED_LOGIN` in `.env`.
+
+## Releases
+
+Versions are `0.x` and come from [conventional commits](https://www.conventionalcommits.org).
+`fix:` is a patch, `feat:` is a minor, and while we are pre-1.0 a breaking
+change (`feat!:` or a `BREAKING CHANGE:` footer) is also only a minor —
+reaching `1.0.0` will be a deliberate decision.
+
+PRs are squash-merged, so **the PR title becomes the commit message** and has
+to be a conventional commit. CI rejects titles that are not.
+
+### Running a release (teammates)
+
+`mise up` pulls the newest release. To pin or roll back, set the version in
+`.env` and run it again:
+
+    HERDR_PWA_VERSION=0.1.0
+
+Images are at `ghcr.io/ibarsi/herdr-pwa`. A release is not usable until that
+package page lists the tag — the git tag is created first, and the image
+build can still fail after it.
+
+### Cutting a release (maintainer)
+
+    mise release:preview   # what the next version and changelog would be
+    mise release           # bump, changelog, commit, tag, push
+
+`mise release` refuses to run unless the working tree is clean, you are on
+`main`, and `main` is up to date with the remote. Pushing the tag is what
+triggers the build; follow it with `gh run watch`.
+
+Commits it cannot parse are listed in a warning and **do not** appear in the
+changelog. Check `mise release:preview` output for that warning before cutting.
 
 ## Security
 
