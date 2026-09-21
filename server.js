@@ -1,5 +1,6 @@
 import http from 'node:http'
 import { readFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { join, normalize, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { herdr, HerdrError } from './herdr.js'
@@ -8,6 +9,10 @@ import { loadTheme } from './theme.js'
 
 const STATIC_DIR = fileURLToPath(new URL('./static/', import.meta.url))
 const PORT = Number(process.env.PORT ?? 8787)
+
+// Read once at startup: the version is baked into the image and cannot change
+// while the process lives. Dockerfile already copies package.json into /app.
+const VERSION = JSON.parse(readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf8')).version
 
 const CONTENT_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -281,6 +286,8 @@ async function route(req, res, url) {
 
   const focus = pathname.match(/^\/api\/agents\/([^/]+)\/focus$/)
   if (focus && req.method === 'POST') return focusAgent(res, decodeURIComponent(focus[1]))
+
+  if (pathname === '/api/version' && req.method === 'GET') return sendJson(res, 200, { version: VERSION })
 
   // Re-read per request. The file is a few KB and this is fetched once per app
   // load, so caching or watching it would be complexity with no payoff.

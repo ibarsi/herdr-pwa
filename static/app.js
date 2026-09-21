@@ -61,6 +61,15 @@ function showError(message) {
   $('error-bar').hidden = !message
 }
 
+async function showVersion() {
+  try {
+    const { version } = await api('/api/version')
+    $('version').textContent = `v${version}`
+  } catch {
+    // A debugging aid, not a feature. Never let it block the agent list.
+  }
+}
+
 /** Applies Herdr's current theme as CSS custom properties. */
 async function applyTheme() {
   try {
@@ -286,6 +295,7 @@ document.addEventListener('visibilitychange', () => {
 })
 
 applyTheme()
+showVersion()
 showList()
 
 if ('serviceWorker' in navigator) {

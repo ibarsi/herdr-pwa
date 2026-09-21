@@ -900,3 +900,20 @@ test('readNotes returns one version section without its heading', () => {
   assert.match(readNotes(changelog, '0.1.0'), /- the old one/)
   assert.equal(readNotes(changelog, '9.9.9'), null)
 })
+
+test('GET /api/version reports the running version without touching the socket', async () => {
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  delete process.env.DEV_BYPASS_AUTH
+  const app = await startServer()
+  try {
+    assert.equal((await fetch(`${app.url}/api/version`)).status, 403)
+    const res = await fetch(`${app.url}/api/version`, { headers: AUTH })
+    assert.equal(res.status, 200)
+    const { version } = await res.json()
+    // Matches whatever package.json currently holds, so the bootstrap bump
+    // does not break this test.
+    assert.match(version, /^\d+\.\d+\.\d+$/)
+  } finally {
+    await app.close()
+  }
+})
