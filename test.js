@@ -9,7 +9,9 @@ import { cleanFeed, hashFeed } from './feed.js'
 import { parseColor, resolveTheme, loadTheme } from './theme.js'
 import { createServer } from './server.js'
 import { classifyLine } from './static/lines.js'
-import { parseSubject, parseCommits, bumpLevel, nextVersion } from './tools/release.js'
+import {
+  parseSubject, parseCommits, bumpLevel, nextVersion, renderChangelog, readNotes,
+} from './tools/release.js'
 
 let sockSeq = 0
 
@@ -838,4 +840,63 @@ test('nextVersion applies ordinary semver at 1.0.0 and above', () => {
 
 test('nextVersion returns null when there is nothing to release', () => {
   assert.equal(nextVersion('0.1.0', null), null)
+})
+
+test('renderChangelog groups by type and labels scopes', () => {
+  const commits = [
+    { type: 'feat', scope: null, description: 'add a thing', breaking: false },
+    { type: 'feat', scope: 'ui', description: 'add another', breaking: false },
+    { type: 'fix', scope: null, description: 'stop the leak', breaking: false },
+    { type: 'chore', scope: null, description: 'tidy up', breaking: false },
+  ]
+  const out = renderChangelog('0.2.0', '2026-09-21', commits)
+  assert.match(out, /^## 0\.2\.0 \(2026-09-21\)/)
+  assert.match(out, /### Features\n\n- add a thing\n- \*\*ui:\*\* add another/)
+  assert.match(out, /### Fixes\n\n- stop the leak/)
+  assert.match(out, /### Chores\n\n- tidy up/)
+})
+
+test('renderChangelog leads with a breaking changes section', () => {
+  const commits = [
+    { type: 'fix', scope: null, description: 'a fix', breaking: false },
+    { type: 'feat', scope: 'api', description: 'drop the v1 route', breaking: true },
+  ]
+  const out = renderChangelog('0.3.0', '2026-09-21', commits)
+  assert.ok(out.indexOf('### Breaking changes') < out.indexOf('### Features'))
+  // A breaking feat appears in both sections, so neither reads as incomplete.
+  assert.equal(out.match(/drop the v1 route/g).length, 2)
+})
+
+test('renderChangelog omits sections with no commits', () => {
+  const out = renderChangelog('0.1.1', '2026-09-21', [
+    { type: 'fix', scope: null, description: 'only a fix', breaking: false },
+  ])
+  assert.doesNotMatch(out, /### Features/)
+  assert.doesNotMatch(out, /### Breaking changes/)
+})
+
+test('readNotes returns one version section without its heading', () => {
+  const changelog = [
+    '# Changelog',
+    '',
+    '## 0.2.0 (2026-09-21)',
+    '',
+    '### Features',
+    '',
+    '- the new one',
+    '',
+    '## 0.1.0 (2026-09-01)',
+    '',
+    '### Features',
+    '',
+    '- the old one',
+    '',
+  ].join('\n')
+  const notes = readNotes(changelog, '0.2.0')
+  assert.match(notes, /- the new one/)
+  assert.doesNotMatch(notes, /the old one/)
+  assert.doesNotMatch(notes, /^## /)
+  // The oldest section runs to end-of-file rather than to the next heading.
+  assert.match(readNotes(changelog, '0.1.0'), /- the old one/)
+  assert.equal(readNotes(changelog, '9.9.9'), null)
 })

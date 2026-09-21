@@ -59,3 +59,41 @@ export function nextVersion(current, level) {
   if (level === 'minor') return `${major}.${minor + 1}.0`
   return `${major}.${minor}.${patch + 1}`
 }
+
+// Ordered most to least interesting to someone reading a release note.
+const SECTIONS = [
+  ['feat', 'Features'],
+  ['fix', 'Fixes'],
+  ['perf', 'Performance'],
+  ['refactor', 'Refactoring'],
+  ['docs', 'Documentation'],
+  ['build', 'Build'],
+  ['ci', 'CI'],
+  ['test', 'Tests'],
+  ['chore', 'Chores'],
+  ['revert', 'Reverts'],
+]
+
+export function renderChangelog(version, date, commits) {
+  const line = (c) => `- ${c.scope ? `**${c.scope}:** ` : ''}${c.description}`
+  const out = [`## ${version} (${date})`, '']
+
+  const breaking = commits.filter((c) => c.breaking)
+  if (breaking.length > 0) out.push('### Breaking changes', '', ...breaking.map(line), '')
+
+  for (const [type, heading] of SECTIONS) {
+    const group = commits.filter((c) => c.type === type)
+    if (group.length > 0) out.push(`### ${heading}`, '', ...group.map(line), '')
+  }
+  return out.join('\n')
+}
+
+/** Pulls one version's body out of CHANGELOG.md, for the GitHub Release. */
+export function readNotes(changelog, version) {
+  const lines = changelog.split('\n')
+  const start = lines.findIndex((l) => l.startsWith(`## ${version} `))
+  if (start === -1) return null
+  const rest = lines.slice(start + 1)
+  const end = rest.findIndex((l) => l.startsWith('## '))
+  return (end === -1 ? rest : rest.slice(0, end)).join('\n').trim()
+}
