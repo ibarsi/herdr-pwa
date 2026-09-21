@@ -9,6 +9,9 @@ import { cleanFeed, hashFeed } from './feed.js'
 import { parseColor, resolveTheme, loadTheme } from './theme.js'
 import { createServer } from './server.js'
 import { classifyLine } from './static/lines.js'
+import {
+  parseSubject, parseCommits, bumpLevel, nextVersion, renderChangelog, readNotes,
+} from './tools/release.js'
 
 let sockSeq = 0
 
@@ -771,5 +774,146 @@ test('GET /api/theme serves the resolved palette and never touches the socket', 
   } finally {
     await app.close()
     await fake.close()
+  }
+})
+
+test('parseSubject reads type, scope, description and the breaking marker', () => {
+  assert.deepEqual(parseSubject('feat: add a thing'), {
+    type: 'feat', scope: null, description: 'add a thing', breaking: false,
+  })
+  assert.deepEqual(parseSubject('fix(server): stop the leak'), {
+    type: 'fix', scope: 'server', description: 'stop the leak', breaking: false,
+  })
+  assert.deepEqual(parseSubject('feat(api)!: drop the v1 route'), {
+    type: 'feat', scope: 'api', description: 'drop the v1 route', breaking: true,
+  })
+})
+
+test('parseSubject rejects anything outside the conventional grammar', () => {
+  assert.equal(parseSubject('wip'), null)
+  assert.equal(parseSubject('Update server.js'), null)
+  // A plausible-looking type that is not on the list is still a rejection,
+  // or CI would accept titles the changelog then silently drops.
+  assert.equal(parseSubject('wibble: something'), null)
+  assert.equal(parseSubject('feat:no space after the colon'), null)
+})
+
+test('parseCommits splits the git log record format and collects rejects', () => {
+  const raw = 'feat: one\x00\x1e\nfix(ui): two\x00body text\x1e\nnonsense here\x00\x1e'
+  const { commits, unparsed } = parseCommits(raw)
+  assert.deepEqual(commits.map((c) => c.description), ['one', 'two'])
+  assert.equal(commits[1].scope, 'ui')
+  assert.deepEqual(unparsed, ['nonsense here'])
+})
+
+test('parseCommits treats a BREAKING CHANGE footer as breaking', () => {
+  const raw = 'feat: one\x00BREAKING CHANGE: the socket path moved\x1e'
+  const { commits } = parseCommits(raw)
+  assert.equal(commits[0].breaking, true)
+  // The hyphenated spelling is equally valid per the convention.
+  const { commits: hyphen } = parseCommits('feat: one\x00BREAKING-CHANGE: moved\x1e')
+  assert.equal(hyphen[0].breaking, true)
+})
+
+test('bumpLevel reports intent, before any pre-1.0 rule is applied', () => {
+  const c = (type, breaking = false) => ({ type, scope: null, description: 'x', breaking })
+  assert.equal(bumpLevel([c('feat', true), c('fix')]), 'major')
+  assert.equal(bumpLevel([c('feat'), c('fix')]), 'minor')
+  assert.equal(bumpLevel([c('fix'), c('docs')]), 'patch')
+  assert.equal(bumpLevel([c('chore'), c('docs')]), null)
+  assert.equal(bumpLevel([]), null)
+})
+
+test('nextVersion keeps a breaking change inside 0.x', () => {
+  // Reaching 1.0.0 must be a decision, never a side effect of a feat!.
+  assert.equal(nextVersion('0.1.0', 'major'), '0.2.0')
+  assert.equal(nextVersion('0.1.0', 'minor'), '0.2.0')
+  assert.equal(nextVersion('0.1.3', 'patch'), '0.1.4')
+  assert.equal(nextVersion('0.0.0', 'minor'), '0.1.0')
+})
+
+test('nextVersion applies ordinary semver at 1.0.0 and above', () => {
+  assert.equal(nextVersion('1.4.2', 'major'), '2.0.0')
+  assert.equal(nextVersion('1.4.2', 'minor'), '1.5.0')
+  assert.equal(nextVersion('1.4.2', 'patch'), '1.4.3')
+})
+
+test('nextVersion returns null when there is nothing to release', () => {
+  assert.equal(nextVersion('0.1.0', null), null)
+})
+
+test('renderChangelog groups by type and labels scopes', () => {
+  const commits = [
+    { type: 'feat', scope: null, description: 'add a thing', breaking: false },
+    { type: 'feat', scope: 'ui', description: 'add another', breaking: false },
+    { type: 'fix', scope: null, description: 'stop the leak', breaking: false },
+    { type: 'chore', scope: null, description: 'tidy up', breaking: false },
+  ]
+  const out = renderChangelog('0.2.0', '2026-09-21', commits)
+  assert.match(out, /^## 0\.2\.0 \(2026-09-21\)/)
+  assert.match(out, /### Features\n\n- add a thing\n- \*\*ui:\*\* add another/)
+  assert.match(out, /### Fixes\n\n- stop the leak/)
+  assert.match(out, /### Chores\n\n- tidy up/)
+})
+
+test('renderChangelog leads with a breaking changes section', () => {
+  const commits = [
+    { type: 'fix', scope: null, description: 'a fix', breaking: false },
+    { type: 'feat', scope: 'api', description: 'drop the v1 route', breaking: true },
+  ]
+  const out = renderChangelog('0.3.0', '2026-09-21', commits)
+  assert.ok(out.indexOf('### Breaking changes') < out.indexOf('### Features'))
+  // A breaking feat appears in both sections, so neither reads as incomplete.
+  assert.equal(out.match(/drop the v1 route/g).length, 2)
+})
+
+test('renderChangelog omits sections with no commits', () => {
+  const out = renderChangelog('0.1.1', '2026-09-21', [
+    { type: 'fix', scope: null, description: 'only a fix', breaking: false },
+  ])
+  assert.doesNotMatch(out, /### Features/)
+  assert.doesNotMatch(out, /### Breaking changes/)
+})
+
+test('readNotes returns one version section without its heading', () => {
+  const changelog = [
+    '# Changelog',
+    '',
+    '## 0.2.0 (2026-09-21)',
+    '',
+    '### Features',
+    '',
+    '- the new one',
+    '',
+    '## 0.1.0 (2026-09-01)',
+    '',
+    '### Features',
+    '',
+    '- the old one',
+    '',
+  ].join('\n')
+  const notes = readNotes(changelog, '0.2.0')
+  assert.match(notes, /- the new one/)
+  assert.doesNotMatch(notes, /the old one/)
+  assert.doesNotMatch(notes, /^## /)
+  // The oldest section runs to end-of-file rather than to the next heading.
+  assert.match(readNotes(changelog, '0.1.0'), /- the old one/)
+  assert.equal(readNotes(changelog, '9.9.9'), null)
+})
+
+test('GET /api/version reports the running version without touching the socket', async () => {
+  process.env.ALLOWED_LOGIN = 'user@example.com'
+  delete process.env.DEV_BYPASS_AUTH
+  const app = await startServer()
+  try {
+    assert.equal((await fetch(`${app.url}/api/version`)).status, 403)
+    const res = await fetch(`${app.url}/api/version`, { headers: AUTH })
+    assert.equal(res.status, 200)
+    const { version } = await res.json()
+    // Matches whatever package.json currently holds, so the bootstrap bump
+    // does not break this test.
+    assert.match(version, /^\d+\.\d+\.\d+$/)
+  } finally {
+    await app.close()
   }
 })

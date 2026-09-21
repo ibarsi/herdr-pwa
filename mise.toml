@@ -39,12 +39,20 @@ fi
 echo
 """
 
+[tasks."release:preview"]
+description = "Show the version and changelog the next release would produce"
+run = "node tools/release.js --dry-run"
+
+[tasks.release]
+description = "Bump, changelog, commit, tag, and push a release (triggers the GHCR build)"
+run = "node tools/release.js"
+
 # =============================================================================
 # Phone / production-shaped run
 # =============================================================================
 
 [tasks.up]
-description = "Build and start compose on 127.0.0.1:8787 (auth on)"
+description = "Pull the released image and start compose on 127.0.0.1:8787 (auth on)"
 run = """
 set -a
 [ -f .env ] && . ./.env
@@ -55,8 +63,13 @@ if [ -z "${ALLOWED_LOGIN:-}" ]; then
   echo "Set ALLOWED_LOGIN (copy .env.example to .env)" >&2
   exit 1
 fi
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 """
+
+[tasks.build]
+description = "Build the container image locally, to test Dockerfile changes"
+run = "docker build -t herdr-pwa:dev ."
 
 [tasks.down]
 description = "Stop the compose service"

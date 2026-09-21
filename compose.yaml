@@ -1,6 +1,10 @@
 services:
   herdr-pwa:
-    build: .
+    # A released artifact, not a local build. `build:` is deliberately absent:
+    # with both keys, `compose up --build` tags a local build as `latest` and
+    # shadows the registry image on that machine. Use `mise build` to test the
+    # image locally. Pin HERDR_PWA_VERSION in .env to roll back.
+    image: ghcr.io/ibarsi/herdr-pwa:${HERDR_PWA_VERSION:-latest}
     container_name: herdr-pwa
     # Herdr's socket is mode 0600. The container uid must match the socket owner
     # or every connection fails with EACCES. Override via HERDR_UID / HERDR_GID.
