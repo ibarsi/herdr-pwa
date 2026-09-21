@@ -1,0 +1,42 @@
+name: CI
+
+# pull_request, never pull_request_target: this repo is public, and
+# pull_request_target would run a fork's code with a writable token.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+      - run: node --test
+
+  # The Dockerfile hand-maintains its COPY list. Adding a source file without
+  # adding it there breaks the image, and nothing else would notice until a
+  # release failed.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t herdr-pwa:ci .
+
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The title goes through env, never through ${{ }} interpolation into the
+      # script: a PR titled with shell metacharacters would otherwise execute
+      # on the runner. Anyone can open a PR here.
+      - run: node tools/release.js --check-title "$PR_TITLE"
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
