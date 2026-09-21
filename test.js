@@ -9,6 +9,7 @@ import { cleanFeed, hashFeed } from './feed.js'
 import { parseColor, resolveTheme, loadTheme } from './theme.js'
 import { createServer } from './server.js'
 import { classifyLine } from './static/lines.js'
+import { parseSubject, parseCommits, bumpLevel, nextVersion } from './tools/release.js'
 
 let sockSeq = 0
 
@@ -772,4 +773,69 @@ test('GET /api/theme serves the resolved palette and never touches the socket', 
     await app.close()
     await fake.close()
   }
+})
+
+test('parseSubject reads type, scope, description and the breaking marker', () => {
+  assert.deepEqual(parseSubject('feat: add a thing'), {
+    type: 'feat', scope: null, description: 'add a thing', breaking: false,
+  })
+  assert.deepEqual(parseSubject('fix(server): stop the leak'), {
+    type: 'fix', scope: 'server', description: 'stop the leak', breaking: false,
+  })
+  assert.deepEqual(parseSubject('feat(api)!: drop the v1 route'), {
+    type: 'feat', scope: 'api', description: 'drop the v1 route', breaking: true,
+  })
+})
+
+test('parseSubject rejects anything outside the conventional grammar', () => {
+  assert.equal(parseSubject('wip'), null)
+  assert.equal(parseSubject('Update server.js'), null)
+  // A plausible-looking type that is not on the list is still a rejection,
+  // or CI would accept titles the changelog then silently drops.
+  assert.equal(parseSubject('wibble: something'), null)
+  assert.equal(parseSubject('feat:no space after the colon'), null)
+})
+
+test('parseCommits splits the git log record format and collects rejects', () => {
+  const raw = 'feat: one\x00\x1e\nfix(ui): two\x00body text\x1e\nnonsense here\x00\x1e'
+  const { commits, unparsed } = parseCommits(raw)
+  assert.deepEqual(commits.map((c) => c.description), ['one', 'two'])
+  assert.equal(commits[1].scope, 'ui')
+  assert.deepEqual(unparsed, ['nonsense here'])
+})
+
+test('parseCommits treats a BREAKING CHANGE footer as breaking', () => {
+  const raw = 'feat: one\x00BREAKING CHANGE: the socket path moved\x1e'
+  const { commits } = parseCommits(raw)
+  assert.equal(commits[0].breaking, true)
+  // The hyphenated spelling is equally valid per the convention.
+  const { commits: hyphen } = parseCommits('feat: one\x00BREAKING-CHANGE: moved\x1e')
+  assert.equal(hyphen[0].breaking, true)
+})
+
+test('bumpLevel reports intent, before any pre-1.0 rule is applied', () => {
+  const c = (type, breaking = false) => ({ type, scope: null, description: 'x', breaking })
+  assert.equal(bumpLevel([c('feat', true), c('fix')]), 'major')
+  assert.equal(bumpLevel([c('feat'), c('fix')]), 'minor')
+  assert.equal(bumpLevel([c('fix'), c('docs')]), 'patch')
+  assert.equal(bumpLevel([c('chore'), c('docs')]), null)
+  assert.equal(bumpLevel([]), null)
+})
+
+test('nextVersion keeps a breaking change inside 0.x', () => {
+  // Reaching 1.0.0 must be a decision, never a side effect of a feat!.
+  assert.equal(nextVersion('0.1.0', 'major'), '0.2.0')
+  assert.equal(nextVersion('0.1.0', 'minor'), '0.2.0')
+  assert.equal(nextVersion('0.1.3', 'patch'), '0.1.4')
+  assert.equal(nextVersion('0.0.0', 'minor'), '0.1.0')
+})
+
+test('nextVersion applies ordinary semver at 1.0.0 and above', () => {
+  assert.equal(nextVersion('1.4.2', 'major'), '2.0.0')
+  assert.equal(nextVersion('1.4.2', 'minor'), '1.5.0')
+  assert.equal(nextVersion('1.4.2', 'patch'), '1.4.3')
+})
+
+test('nextVersion returns null when there is nothing to release', () => {
+  assert.equal(nextVersion('0.1.0', null), null)
 })
