@@ -39,6 +39,14 @@ fi
 echo
 """
 
+[tasks."release:preview"]
+description = "Show the version and changelog the next release would produce"
+run = "node tools/release.js --dry-run"
+
+[tasks.release]
+description = "Bump, changelog, commit, tag, and push a release (triggers the GHCR build)"
+run = "node tools/release.js"
+
 # =============================================================================
 # Phone / production-shaped run
 # =============================================================================
