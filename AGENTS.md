@@ -1,6 +1,6 @@
 # Agent notes
 
-Releases are cut from commit subjects on `main`. `tools/release.js` parses those subjects, bumps `package.json`, writes `CHANGELOG.md`, tags, and pushes. A tag workflow then publishes `ghcr.io/ibarsi/herdr-pwa`. The human walkthrough is in the Releases section of `README.md`.
+Releases are cut from commit subjects on `main`. A push to `main` runs `.github/workflows/cut-release.yml`, which uses `tools/release.js --ci` to bump `package.json`, write `CHANGELOG.md`, tag, and push with the release deploy key. The tag workflow then publishes `ghcr.io/ibarsi/herdr-pwa` and the GitHub Release notes. The human walkthrough is in the Releases section of `README.md`.
 
 ## Pull requests
 
@@ -23,8 +23,9 @@ Releases are cut from commit subjects on `main`. `tools/release.js` parses those
 - No npm dependencies, including devDependencies. The release parser is hand-rolled on purpose. Do not add `semver`, a linter, or a formatter.
 - Node 26, ES modules, and `import.meta.main` as the CLI entry guard.
 - `.github/workflows/ci.yml` triggers on `pull_request`, never `pull_request_target`. The pull request title is passed through `env`, never interpolated into `run`.
-- `.github/workflows/release.yml` only reacts to `v*` tags. No workflow writes to `main`.
-- Do not run `mise release` unless the user asks. It commits, tags, and pushes `main`.
+- `.github/workflows/cut-release.yml` is the only workflow that writes to `main`. It pushes with the `RELEASE_DEPLOY_KEY` deploy key, which is on the ruleset bypass list. Do not switch that push to `GITHUB_TOKEN`: a token push is rejected by the ruleset and does not start the tag workflow.
+- `.github/workflows/release.yml` only reacts to `v*` tags.
+- Do not run `mise release` unless the user asks. Merges to `main` already cut the release.
 
 ## Code owners
 

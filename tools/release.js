@@ -119,16 +119,37 @@ function fail(message) {
  * Refuses to release from a state that would produce a tag nobody can
  * reproduce. Checked before anything is written, so a refusal leaves no mess.
  */
-function assertReleasable() {
-  if (git('status', '--porcelain') !== '') fail('working tree is not clean')
-  if (git('rev-parse', '--abbrev-ref', 'HEAD') !== 'main') fail('not on main')
+function fetchMain() {
   try {
     git('fetch', '--tags', 'origin', 'main')
   } catch {
     fail('cannot reach origin')
   }
+}
+
+function assertReleasable() {
+  if (git('status', '--porcelain') !== '') fail('working tree is not clean')
+  if (git('rev-parse', '--abbrev-ref', 'HEAD') !== 'main') fail('not on main')
+  fetchMain()
   const behind = git('rev-list', '--count', 'HEAD..origin/main')
   if (behind !== '0') fail(`local main is ${behind} commit(s) behind origin/main`)
+}
+
+/**
+ * Actions checks out a detached HEAD. The release commit has to be on main,
+ * and only the tip of main may cut: an older run would miss commits that
+ * landed while it was queued.
+ */
+function prepareCi() {
+  if (git('status', '--porcelain') !== '') fail('working tree is not clean')
+  if (git('rev-parse', '--abbrev-ref', 'HEAD') === 'HEAD') git('checkout', '-B', 'main')
+  if (git('rev-parse', '--abbrev-ref', 'HEAD') !== 'main') fail('not on main')
+  fetchMain()
+  if (git('rev-parse', 'HEAD') !== git('rev-parse', 'origin/main')) {
+    console.log('release: main has moved; a later run will cut the release')
+    return false
+  }
+  return true
 }
 
 const lastTag = () => {
@@ -172,7 +193,13 @@ function main(args) {
   }
 
   const dryRun = args.includes('--dry-run')
-  if (!dryRun) assertReleasable()
+  const ci = args.includes('--ci')
+  if (ci && dryRun) fail('pass either --ci or --dry-run')
+  if (ci) {
+    if (!prepareCi()) return
+  } else if (!dryRun) {
+    assertReleasable()
+  }
 
   const tag = lastTag()
   const { commits, unparsed } = parseCommits(logSince(tag))
@@ -205,6 +232,14 @@ function main(args) {
   git('add', 'package.json', 'CHANGELOG.md')
   git('commit', '-m', `chore(release): ${version}`)
   git('tag', `v${version}`)
+  if (ci) {
+    fetchMain()
+    // A merge landed after we decided we were the tip. Pushing would be
+    // rejected, and that merge's run includes the commits we just tagged.
+    if (git('rev-parse', 'HEAD~1') !== git('rev-parse', 'origin/main')) {
+      return console.log('release: main moved while cutting; not pushing')
+    }
+  }
   git('push', '--follow-tags', 'origin', 'main')
   console.log(`\nReleased v${version}. Follow the build with: gh run watch`)
 }

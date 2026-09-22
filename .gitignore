@@ -3,3 +3,7 @@ node_modules/
 .worktrees/
 .env
 docs/superpowers/
+
+# Release deploy key. The private half is the RELEASE_DEPLOY_KEY Actions secret.
+release-key
+release-key.pub

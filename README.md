@@ -95,17 +95,20 @@ Images are at `ghcr.io/ibarsi/herdr-pwa`. A release is not usable until that
 package page lists the tag — the git tag is created first, and the image
 build can still fail after it.
 
-### Cutting a release (maintainer)
+### Cutting a release
 
-    mise release:preview   # what the next version and changelog would be
-    mise release           # bump, changelog, commit, tag, push
+Merging to `main` cuts the release when the new commits include a `feat`, a
+`fix`, or a breaking change. The workflow writes `CHANGELOG.md` from those
+commits, tags, and pushes with the release deploy key. That tag push builds
+the image and opens the GitHub Release. A `docs` or `chore` merge publishes
+nothing. Follow the build with `gh run watch`.
 
-`mise release` refuses to run unless the working tree is clean, you are on
-`main`, and `main` is up to date with the remote. Pushing the tag is what
-triggers the build; follow it with `gh run watch`.
+`mise release:preview` still prints what the next merge would cut. `mise
+release` does the same cut from a clean, up-to-date local `main` when you
+need to run it by hand.
 
-Commits it cannot parse are listed in a warning and **do not** appear in the
-changelog. Check `mise release:preview` output for that warning before cutting.
+Commits the parser rejects are listed in a warning and **do not** appear in
+the changelog.
 
 ## Security
 

@@ -1,0 +1,36 @@
+name: Cut release
+
+# A merge to main is the release. The tag push, made with the deploy key
+# rather than GITHUB_TOKEN, is what starts the image build and GitHub Release.
+# A token push would not start that workflow, and the ruleset would reject it.
+on:
+  push:
+    branches: [main]
+
+# Queued, not cancelled: the run that still matches origin/main does the cut.
+concurrency:
+  group: cut-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+
+      - name: Commit the version and push the tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          node tools/release.js --ci
