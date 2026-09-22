@@ -103,9 +103,7 @@ commits, tags, and pushes with the release deploy key. That tag push builds
 the image and opens the GitHub Release. A `docs` or `chore` merge publishes
 nothing. Follow the build with `gh run watch`.
 
-`mise release:preview` still prints what the next merge would cut. `mise
-release` does the same cut from a clean, up-to-date local `main` when you
-need to run it by hand.
+`mise release:preview` prints what the next merge would cut.
 
 Commits the parser rejects are listed in a warning and **do not** appear in
 the changelog.

@@ -40,12 +40,8 @@ echo
 """
 
 [tasks."release:preview"]
-description = "Show the version and changelog the next release would produce"
+description = "Show the version and changelog the next merge to main would publish"
 run = "node tools/release.js --dry-run"
-
-[tasks.release]
-description = "Manually bump, changelog, commit, tag, and push (a merge to main already does this)"
-run = "node tools/release.js"
 
 # =============================================================================
 # Phone / production-shaped run

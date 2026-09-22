@@ -13,7 +13,7 @@ Releases are cut from commit subjects on `main`. A push to `main` runs `.github/
 ## Version and image
 
 - `package.json` `"version"` is the running version. The server reads it once at startup, and the image copies that file. Do not hardcode a version in the client or in `static/sw.js`.
-- Do not edit the version or `CHANGELOG.md` by hand. `mise release` owns both. `0.0.0` is the unreleased baseline. The first real tag comes from the tool.
+- Do not edit the version or `CHANGELOG.md` by hand. `.github/workflows/cut-release.yml` owns both. `0.0.0` is the unreleased baseline. The first real tag comes from that workflow.
 - Reaching `1.0.0` is a deliberate edit of `package.json`, never a side effect of a breaking commit.
 - `compose.yaml` pulls `ghcr.io/ibarsi/herdr-pwa:${HERDR_PWA_VERSION:-latest}`. Do not add a `build:` key. Test a Dockerfile change with `mise build`.
 - The Dockerfile `COPY` list is hand-maintained. A new file the running server needs has to be added there. `tools/release.js` stays out of the image. It runs on the maintainer's machine and in GitHub Actions.
@@ -25,7 +25,7 @@ Releases are cut from commit subjects on `main`. A push to `main` runs `.github/
 - `.github/workflows/ci.yml` triggers on `pull_request`, never `pull_request_target`. The pull request title is passed through `env`, never interpolated into `run`.
 - `.github/workflows/cut-release.yml` is the only workflow that writes to `main`. It pushes with the `RELEASE_DEPLOY_KEY` deploy key, which is on the ruleset bypass list. Do not switch that push to `GITHUB_TOKEN`: a token push is rejected by the ruleset and does not start the tag workflow.
 - `.github/workflows/release.yml` only reacts to `v*` tags.
-- Do not run `mise release` unless the user asks. Merges to `main` already cut the release.
+- Do not run `node tools/release.js` without `--dry-run` unless the user asks. A push to `main` already cuts the release.
 
 ## Code owners
 
