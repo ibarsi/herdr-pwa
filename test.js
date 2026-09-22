@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import net from 'node:net'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { writeFileSync } from 'node:fs'
@@ -228,6 +229,89 @@ test('classifyLine reads the glyphs claude and grok actually print', () => {
   for (const [line, expected] of cases) {
     assert.equal(classifyLine(line), expected, JSON.stringify(line))
   }
+})
+
+test('a feed poll that lands after Back does not read status off null', () => {
+  const script = join(tmpdir(), `herdr-feed-race-${process.pid}.mjs`)
+  writeFileSync(script, `
+    function el() {
+      const names = new Set()
+      return {
+        hidden: false,
+        textContent: '',
+        value: '',
+        disabled: false,
+        dataset: {},
+        style: {},
+        classList: {
+          add(name) { names.add(name) },
+          remove(name) { names.delete(name) },
+          contains(name) { return names.has(name) },
+        },
+        append() {},
+        addEventListener() {},
+        setAttribute() {},
+        scrollHeight: 0,
+        scrollTop: 0,
+        clientHeight: 0,
+      }
+    }
+    const nodes = new Map()
+    const node = (id) => {
+      if (!nodes.has(id)) nodes.set(id, el())
+      return nodes.get(id)
+    }
+    globalThis.document = {
+      hidden: false,
+      documentElement: { style: { setProperty() {} } },
+      getElementById: node,
+      createElement: el,
+      createDocumentFragment: () => ({ append() {} }),
+      querySelector: () => ({ setAttribute() {} }),
+      addEventListener() {},
+    }
+    let releaseFeed
+    globalThis.fetch = (path) => {
+      const ok = (body) => Promise.resolve({ ok: true, status: 200, json: async () => body })
+      if (String(path).includes('/feed')) {
+        return new Promise((resolve) => {
+          releaseFeed = () => resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ status: 'working', text: 'hello\\n', hash: 'abc', source: 'recent' }),
+          })
+        })
+      }
+      if (String(path).includes('/api/version')) return ok({ version: '0.0.0' })
+      if (String(path).includes('/api/theme')) return ok({ colors: {} })
+      return ok({ agents: [] })
+    }
+    const { showFeed, showList } = await import(${JSON.stringify(new URL('./static/app.js', import.meta.url).href)})
+    showFeed({ pane_id: 'w1:p1', title: 'grok', status: 'idle', agent: 'grok', dir: 'proj' })
+    if (!releaseFeed) throw new Error('feed poll never started')
+    showList()
+    releaseFeed()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    const message = node('error-bar').textContent
+    if (/status/i.test(message)) {
+      console.error(message)
+      process.exit(1)
+    }
+    process.exit(0)
+  `)
+  const result = spawnSync(process.execPath, [script], { encoding: 'utf8' })
+  assert.equal(result.status, 0, result.stderr || result.stdout)
+})
+
+test('herdr link light returns to green after the connection comes back', async () => {
+  const { paintHerdrLink } = await import('./static/app.js')
+  const el = { dataset: {} }
+  paintHerdrLink(el, true)
+  assert.equal(el.dataset.state, 'up')
+  paintHerdrLink(el, false)
+  assert.equal(el.dataset.state, 'down')
+  paintHerdrLink(el, true)
+  assert.equal(el.dataset.state, 'up')
 })
 
 test('classifyLine flags failures without reddening prose that mentions them', () => {

@@ -87,6 +87,11 @@ async function applyTheme() {
   }
 }
 
+/** Latest poll wins, so a restored Herdr turns a red light green again. */
+export function paintHerdrLink(el, up) {
+  el.dataset.state = up ? 'up' : 'down'
+}
+
 function renderList(agents) {
   const list = $('agent-list')
   list.textContent = ''
@@ -124,10 +129,6 @@ function renderList(agents) {
     row.append(dot, body, status)
     list.append(row)
   }
-
-  const blocked = agents.filter((a) => a.status === 'blocked').length
-  $('blocked-pill').textContent = String(blocked)
-  $('blocked-pill').hidden = blocked === 0
 }
 
 async function pollList() {
@@ -135,7 +136,9 @@ async function pollList() {
     const { agents } = await api('/api/agents')
     renderList(agents)
     showError('')
+    paintHerdrLink($('herdr-light'), true)
   } catch (err) {
+    paintHerdrLink($('herdr-light'), false)
     showError(err.message.includes('herdr') ? "Herdr isn't running" : err.message)
   }
 }
@@ -170,13 +173,17 @@ function atBottom(el) {
 }
 
 async function pollFeed() {
-  if (!state.agent) return
-  const pane = encodeURIComponent(state.agent.pane_id)
+  // Captured so a response that lands after Back, or after opening another
+  // agent, is dropped instead of reading status off a cleared agent.
+  const agent = state.agent
+  if (!agent) return
+  const pane = encodeURIComponent(agent.pane_id)
   const query = new URLSearchParams({ source: state.source })
   if (state.hash) query.set('h', state.hash)
 
   try {
     const body = await api(`/api/agents/${pane}/feed?${query}`)
+    if (state.agent !== agent) return
     showError('')
 
     if (body.status && body.status !== state.agent.status) setFeedStatus(body.status)
@@ -195,6 +202,7 @@ async function pollFeed() {
     // reading something and yanking the scroll away is infuriating.
     if (follow) feed.scrollTop = feed.scrollHeight
   } catch (err) {
+    if (state.agent !== agent) return
     if (err.message.includes('no longer running')) {
       showList()
       showError('That agent has ended')
@@ -238,66 +246,68 @@ function postJson(path, body) {
   })
 }
 
-$('back').onclick = () => showList()
+if (typeof document !== 'undefined') {
+  $('back').onclick = () => showList()
 
-$('toggle-source').onclick = () => {
-  state.source = state.source === 'visible' ? 'recent' : 'visible'
-  state.hash = null
-  setSourceLabel(state.source)
-  pollFeed()
-}
+  $('toggle-source').onclick = () => {
+    state.source = state.source === 'visible' ? 'recent' : 'visible'
+    state.hash = null
+    setSourceLabel(state.source)
+    pollFeed()
+  }
 
-$('focus-btn').onclick = () =>
-  withRefresh(() => postJson(`/api/agents/${encodeURIComponent(state.agent.pane_id)}/focus`, {}))
+  $('focus-btn').onclick = () =>
+    withRefresh(() => postJson(`/api/agents/${encodeURIComponent(state.agent.pane_id)}/focus`, {}))
 
-for (const [key, label] of KEYS) {
-  const button = document.createElement('button')
-  button.type = 'button'
-  button.textContent = label
-  button.onclick = () =>
-    withRefresh(() =>
-      postJson(`/api/agents/${encodeURIComponent(state.agent.pane_id)}/keys`, { keys: [key] })
+  for (const [key, label] of KEYS) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.textContent = label
+    button.onclick = () =>
+      withRefresh(() =>
+        postJson(`/api/agents/${encodeURIComponent(state.agent.pane_id)}/keys`, { keys: [key] })
+      )
+    $('keys').append(button)
+  }
+
+  const input = $('text')
+
+  input.addEventListener('input', () => {
+    $('send').disabled = input.value.trim() === ''
+    // Grow with the content; the CSS max-height caps it.
+    input.style.height = 'auto'
+    input.style.height = `${input.scrollHeight}px`
+  })
+
+  $('composer').addEventListener('submit', async (event) => {
+    event.preventDefault()
+    const text = input.value.trim()
+    if (!text) return
+
+    $('send').disabled = true
+    // Cleared optimistically: a reply that survives in the box after a send looks
+    // like a failure, and the feed poll is the real confirmation either way.
+    input.value = ''
+    input.style.height = 'auto'
+
+    await withRefresh(() =>
+      postJson(`/api/agents/${encodeURIComponent(state.agent.pane_id)}/send`, { text })
     )
-  $('keys').append(button)
-}
+  })
 
-const input = $('text')
+  // Polling stops when the app is backgrounded: on iOS the timers are throttled
+  // to uselessness anyway, and every wasted request is battery.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return clearInterval(state.timer)
+    if (state.agent) startPolling(pollFeed, FEED_POLL_MS)
+    else startPolling(pollList, LIST_POLL_MS)
+  })
 
-input.addEventListener('input', () => {
-  $('send').disabled = input.value.trim() === ''
-  // Grow with the content; the CSS max-height caps it.
-  input.style.height = 'auto'
-  input.style.height = `${input.scrollHeight}px`
-})
+  applyTheme()
+  showVersion()
+  showList()
 
-$('composer').addEventListener('submit', async (event) => {
-  event.preventDefault()
-  const text = input.value.trim()
-  if (!text) return
-
-  $('send').disabled = true
-  // Cleared optimistically: a reply that survives in the box after a send looks
-  // like a failure, and the feed poll is the real confirmation either way.
-  input.value = ''
-  input.style.height = 'auto'
-
-  await withRefresh(() =>
-    postJson(`/api/agents/${encodeURIComponent(state.agent.pane_id)}/send`, { text })
-  )
-})
-
-// Polling stops when the app is backgrounded: on iOS the timers are throttled
-// to uselessness anyway, and every wasted request is battery.
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) return clearInterval(state.timer)
-  if (state.agent) startPolling(pollFeed, FEED_POLL_MS)
-  else startPolling(pollList, LIST_POLL_MS)
-})
-
-applyTheme()
-showVersion()
-showList()
-
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch((err) => console.warn('sw registration failed', err))
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch((err) => console.warn('sw registration failed', err))
+  }
 }

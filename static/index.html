@@ -43,10 +43,11 @@
         /* Stops pull-to-refresh from fighting the feed scroll. */
         overscroll-behavior: none;
       }
+      body { display: flex; flex-direction: column; }
 
       button { font: inherit; color: inherit; background: none; border: 0; }
 
-      .view { display: none; flex-direction: column; height: 100dvh; }
+      .view { display: none; flex-direction: column; flex: 1 1 auto; min-height: 0; }
       .view.active { display: flex; }
 
       header {
@@ -58,6 +59,8 @@
         border-bottom: 1px solid var(--surface0);
         flex: 0 0 auto;
       }
+      /* The banner already clears the notch, so the header must not add it again. */
+      body:has(#error-bar:not([hidden])) header { padding-top: 10px; }
       header h1 { margin: 0; font-size: 17px; font-weight: 600; }
       header .sub { color: var(--subtext0); font-size: 13px; }
       .grow { flex: 1 1 auto; min-width: 0; }
@@ -73,12 +76,18 @@
       }
       .pill[hidden] { display: none; }
 
+      /* Red until a list poll reaches Herdr, then green. The latest poll wins. */
+      .herdr-light {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        flex: 0 0 auto;
+        background: var(--red);
+      }
+      .herdr-light[data-state='up'] { background: var(--green); }
+
       #error-bar {
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        z-index: 10;
+        flex: 0 0 auto;
         padding: max(env(safe-area-inset-top), 9px) 14px 9px;
         background: var(--red);
         color: var(--panel-bg);
@@ -204,7 +213,7 @@
       <header>
         <h1 class="grow">Agents</h1>
         <span id="version" class="sub"></span>
-        <span id="blocked-pill" class="pill" hidden></span>
+        <span id="herdr-light" class="herdr-light" data-state="down"></span>
       </header>
       <div id="agent-list"></div>
     </section>
