@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 (2026-09-22)
+
+### Features
+
+- show a light for the Herdr connection
+
+### CI
+
+- push the release tag with the version commit
+
 ## 0.2.0 (2026-09-22)
 
 ### Features
