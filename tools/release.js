@@ -240,7 +240,9 @@ function main(args) {
       return console.log('release: main moved while cutting; not pushing')
     }
   }
-  git('push', '--follow-tags', 'origin', 'main')
+  // --follow-tags only pushes annotated tags. This tag is lightweight, so name
+  // it or the image workflow never starts.
+  git('push', 'origin', 'main', `v${version}`)
   console.log(`\nReleased v${version}. Follow the build with: gh run watch`)
 }
 
