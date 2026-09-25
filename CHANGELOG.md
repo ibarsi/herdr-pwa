@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0 (2026-09-25)
+
+### Features
+
+- stream the feed and agent list instead of polling (#3)
+
 ## 0.3.0 (2026-09-22)
 
 ### Features
