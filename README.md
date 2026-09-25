@@ -9,7 +9,7 @@ The phone reaches it over Tailscale. On iPhone, Add to Home Screen opens it with
 [Run it](#run-it-on-a-phone) · [Features](#features) · [Develop](#develop) · [Releases](#releases)
 
 <p align="center">
-  <img src="docs/images/agents.png" width="260" alt="Agent list. Blocked agents sort first. A green light means Herdr answered the poll.">
+  <img src="docs/images/agents.png" width="260" alt="Agent list. Blocked agents sort first. A green light means the live connection to Herdr is up.">
   <img src="docs/images/feed.png" width="260" alt="A blocked agent waiting on an approval, with a key row and a reply ready to send.">
 </p>
 
@@ -18,16 +18,16 @@ It runs against the Herdr on your machine, so the pictures are a sample session.
 ## Features
 
 - **Stuck agents come first.** The list sorts blocked, then working, then idle. A row shows the workspace name, which agent it is, the directory, and a status dot in Herdr's colours.
-- **The feed, on a phone.** Recent scrollback by default. The screen control swaps that for the visible pane. Horizontal rules are dropped. Lines take their colour from the glyphs agents print, in whatever theme Herdr is using, light palettes included.
+- **The feed, on a phone, live.** New output streams in as the agent works, and scrolling up to read stays put. Recent scrollback by default. The screen control swaps that for the visible pane. Horizontal rules are dropped. Lines take their colour from the glyphs agents print, in whatever theme Herdr is using, light palettes included.
 - **Reply, including an approval.** The composer sends text. When the agent is blocked, that text goes in as pane input, which is how a prompt accepts an answer.
 - **The key the prompt expects.** `1` `2` `3`, `y` `n`, enter, esc, the arrows, tab, shift-tab, and ctrl-c.
 - **Bring it forward on the desktop.** The circle in the header focuses that agent in Herdr on the host.
-- **A light for the socket.** Green after a list poll reaches Herdr, red when it does not. The shell still opens if the phone loses Tailscale. Live status is never served from cache.
+- **A light for the socket.** Green while the live connection to Herdr is up, red when it drops. The shell still opens if the phone loses Tailscale. Live status is never served from cache.
 - **Home screen app.** Safari, Share, Add to Home Screen. It then launches standalone.
 
 ## How a tap gets there
 
-The phone talks to Tailscale Serve. Serve adds your Tailscale login and proxies to the adapter on `127.0.0.1:8787`. The adapter checks that login, then opens one connection per call to `~/.config/herdr/herdr.sock`. The host port is loopback, so the LAN never sees the adapter.
+The phone talks to Tailscale Serve. Serve adds your Tailscale login and proxies to the adapter on `127.0.0.1:8787`. The adapter checks that login, then opens one connection per call to `~/.config/herdr/herdr.sock`. The list and the open feed come back over server-sent events. Herdr pushes status and panes opening or closing. It has no event for new pane text yet, so the adapter reads the open feed every 500ms, and only while that agent is working or blocked. The host port is loopback, so the LAN never sees the adapter.
 
 ## Run it on a phone
 

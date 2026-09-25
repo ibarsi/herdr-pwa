@@ -27,12 +27,12 @@ export function cleanFeed(text) {
 }
 
 /**
- * Content hash for conditional fetch.
+ * Content hash, so the feed stream only pushes text that changed.
  *
  * PaneReadResult.revision cannot be used for this: measured against Herdr
  * 0.9.0 it is always 0 for both `visible` and `recent` while the text changes
  * underneath. Hashing after cleaning means cosmetic churn the cleaner removes
- * does not trigger a re-render on the phone.
+ * is never pushed to the phone.
  */
 export function hashFeed(text) {
   return createHash('sha1').update(text).digest('base64url').slice(0, 16)
