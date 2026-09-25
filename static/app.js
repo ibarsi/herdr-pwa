@@ -1,40 +1,72 @@
-import { classifyLine } from './lines.js'
+import { classifyLine, diffLines } from './lines.js'
 
 const $ = (id) => document.getElementById(id)
-
-const LIST_POLL_MS = 3000
-const FEED_POLL_MS = 2000
 
 const state = {
   agent: null, // the agent being viewed, or null on the list
   source: 'recent', // scrollback by default; the screen alone has nothing to scroll
-  hash: null,
-  timer: null,
+  lines: [], // what the feed is showing, one DOM node per line
+  stream: null, // the one open EventSource
 }
 
 /**
- * Paints the feed one line at a time.
+ * One line as one DOM node, so the feed can be edited line by line.
  *
- * Still textContent per line, never innerHTML — this is terminal output and a
- * pane title or a file name in it may contain anything. Plain lines stay bare
- * text nodes rather than spans: they are the majority, and wrapping them would
- * multiply the node count of a 1000-line feed to no visible end.
+ * Still textContent, never innerHTML — this is terminal output and a pane title
+ * or a file name in it may contain anything. Plain lines stay bare text nodes
+ * rather than spans: they are the majority, and wrapping them would multiply
+ * the node count of a 1000-line feed to no visible end.
  */
-function renderFeed(feed, text) {
+function lineNode(line) {
+  const cls = classifyLine(line)
+  if (!cls) return `${line}\n`
+  const span = document.createElement('span')
+  span.className = `l-${cls}`
+  span.textContent = `${line}\n`
+  return span
+}
+
+/**
+ * Paints `lines` over what is on screen, touching only what changed.
+ *
+ * A reader scrolled up keeps their place: lines that slide off the top of the
+ * 1000-line window take their height with them, and the scroll position moves
+ * back by exactly that much. Only a reader already at the bottom follows the tail.
+ */
+function paintFeed(feed, lines) {
+  const { drop, keep, append } = diffLines(state.lines, lines)
+  const follow = atBottom(feed)
+  const top = feed.scrollTop
+  const before = feed.scrollHeight
+  for (let i = 0; i < drop; i++) feed.firstChild.remove()
+  const shift = before - feed.scrollHeight
+  while (feed.childNodes.length > keep) feed.lastChild.remove()
   const frag = document.createDocumentFragment()
-  for (const line of text.split('\n')) {
-    const cls = classifyLine(line)
-    if (!cls) {
-      frag.append(`${line}\n`)
-      continue
-    }
-    const span = document.createElement('span')
-    span.className = `l-${cls}`
-    span.textContent = `${line}\n`
-    frag.append(span)
-  }
-  feed.textContent = ''
+  frag.append(...append.map(lineNode))
   feed.append(frag)
+  state.lines = lines
+  feed.scrollTop = follow ? feed.scrollHeight : top - shift
+}
+
+function clearFeed() {
+  $('feed').textContent = ''
+  state.lines = []
+}
+
+/**
+ * Opens `url` as the one live stream, closing whatever was open, and routes its
+ * named events to `handlers`. A closed EventSource delivers nothing, so a feed
+ * left with Back can never paint over the list.
+ */
+function listen(url, handlers, onLost) {
+  state.stream?.close()
+  const stream = new EventSource(url)
+  for (const [event, fn] of Object.entries(handlers)) {
+    stream.addEventListener(event, (e) => fn(JSON.parse(e.data)))
+  }
+  // The browser reconnects on its own; this only says so meanwhile.
+  stream.addEventListener('error', onLost)
+  state.stream = stream
 }
 
 /** Status drives the subtitle and the header's accent colour together. */
@@ -87,7 +119,7 @@ async function applyTheme() {
   }
 }
 
-/** Latest poll wins, so a restored Herdr turns a red light green again. */
+/** Latest event wins, so a restored Herdr turns a red light green again. */
 export function paintHerdrLink(el, up) {
   el.dataset.state = up ? 'up' : 'down'
 }
@@ -131,30 +163,32 @@ function renderList(agents) {
   }
 }
 
-async function pollList() {
-  try {
-    const { agents } = await api('/api/agents')
-    renderList(agents)
-    showError('')
-    paintHerdrLink($('herdr-light'), true)
-  } catch (err) {
-    paintHerdrLink($('herdr-light'), false)
-    showError(err.message.includes('herdr') ? "Herdr isn't running" : err.message)
-  }
-}
+const LOST = 'Connection lost, reconnecting…'
 
-/** Runs `fn` now and every `ms`, replacing whatever poll was running. */
-function startPolling(fn, ms) {
-  clearInterval(state.timer)
-  fn()
-  state.timer = setInterval(fn, ms)
+function openList() {
+  const down = (message) => {
+    paintHerdrLink($('herdr-light'), false)
+    showError(message)
+  }
+  listen(
+    '/api/stream',
+    {
+      agents: ({ agents }) => {
+        renderList(agents)
+        showError('')
+        paintHerdrLink($('herdr-light'), true)
+      },
+      down: ({ message }) => down(message.includes('herdr') ? "Herdr isn't running" : message),
+    },
+    () => down(LOST)
+  )
 }
 
 export function showList() {
   state.agent = null
   $('feed-view').classList.remove('active')
   $('list-view').classList.add('active')
-  startPolling(pollList, LIST_POLL_MS)
+  openList()
 }
 
 // Mirrors KEY_PALETTE in server.js. Labels are what fits on a phone.
@@ -172,67 +206,46 @@ function atBottom(el) {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 40
 }
 
-async function pollFeed() {
-  // Captured so a response that lands after Back, or after opening another
-  // agent, is dropped instead of reading status off a cleared agent.
-  const agent = state.agent
-  if (!agent) return
-  const pane = encodeURIComponent(agent.pane_id)
-  const query = new URLSearchParams({ source: state.source })
-  if (state.hash) query.set('h', state.hash)
-
-  try {
-    const body = await api(`/api/agents/${pane}/feed?${query}`)
-    if (state.agent !== agent) return
-    showError('')
-
-    if (body.status && body.status !== state.agent.status) setFeedStatus(body.status)
-
-    // The server downgrades to the screen when a working agent has no
-    // capturable history, so the label follows the answer, not the request.
-    if (body.source) setSourceLabel(body.source)
-
-    if (body.unchanged) return
-
-    const feed = $('feed')
-    const follow = atBottom(feed)
-    renderFeed(feed, body.text)
-    state.hash = body.hash
-    // Only snap to the tail if the user was already there; otherwise they are
-    // reading something and yanking the scroll away is infuriating.
-    if (follow) feed.scrollTop = feed.scrollHeight
-  } catch (err) {
-    if (state.agent !== agent) return
-    if (err.message.includes('no longer running')) {
-      showList()
-      showError('That agent has ended')
-      return
-    }
-    showError(err.message)
-  }
+function openFeed() {
+  listen(
+    `/api/agents/${encodeURIComponent(state.agent.pane_id)}/stream?source=${state.source}`,
+    {
+      status: ({ status }) => setFeedStatus(status),
+      feed: ({ text, source }) => {
+        showError('')
+        // The server downgrades to the screen when a working agent has no
+        // capturable history, so the label follows the answer, not the request.
+        setSourceLabel(source)
+        paintFeed($('feed'), text.split('\n'))
+      },
+      gone: () => {
+        showList()
+        showError('That agent has ended')
+      },
+      down: ({ message }) => showError(message),
+    },
+    () => showError(LOST)
+  )
 }
 
 export function showFeed(agent) {
   state.agent = { ...agent }
   state.source = 'recent'
-  state.hash = null
 
   $('feed-title').textContent = agent.title
   setFeedStatus(agent.status)
-  $('feed').textContent = ''
+  clearFeed()
   setSourceLabel(state.source)
 
   $('list-view').classList.remove('active')
   $('feed-view').classList.add('active')
-  startPolling(pollFeed, FEED_POLL_MS)
+  openFeed()
 }
 
-/** Sends, then polls immediately so the reply appears without waiting 2s. */
-async function withRefresh(fn) {
+/** The stream shows the result; the server wakes the feed on any input. */
+async function act(fn) {
   try {
     await fn()
-    state.hash = null
-    await pollFeed()
   } catch (err) {
     showError(err.message)
   }
@@ -251,20 +264,20 @@ if (typeof document !== 'undefined') {
 
   $('toggle-source').onclick = () => {
     state.source = state.source === 'visible' ? 'recent' : 'visible'
-    state.hash = null
+    clearFeed()
     setSourceLabel(state.source)
-    pollFeed()
+    openFeed()
   }
 
   $('focus-btn').onclick = () =>
-    withRefresh(() => postJson(`/api/agents/${encodeURIComponent(state.agent.pane_id)}/focus`, {}))
+    act(() => postJson(`/api/agents/${encodeURIComponent(state.agent.pane_id)}/focus`, {}))
 
   for (const [key, label] of KEYS) {
     const button = document.createElement('button')
     button.type = 'button'
     button.textContent = label
     button.onclick = () =>
-      withRefresh(() =>
+      act(() =>
         postJson(`/api/agents/${encodeURIComponent(state.agent.pane_id)}/keys`, { keys: [key] })
       )
     $('keys').append(button)
@@ -286,21 +299,24 @@ if (typeof document !== 'undefined') {
 
     $('send').disabled = true
     // Cleared optimistically: a reply that survives in the box after a send looks
-    // like a failure, and the feed poll is the real confirmation either way.
+    // like a failure, and the feed stream is the real confirmation either way.
     input.value = ''
     input.style.height = 'auto'
 
-    await withRefresh(() =>
+    await act(() =>
       postJson(`/api/agents/${encodeURIComponent(state.agent.pane_id)}/send`, { text })
     )
   })
 
-  // Polling stops when the app is backgrounded: on iOS the timers are throttled
-  // to uselessness anyway, and every wasted request is battery.
+  // The stream closes when the app is backgrounded: iOS suspends it anyway, and
+  // while it is open the server keeps reading Herdr for it. Reopening repaints
+  // through the same diff, so a reader scrolled up keeps their place.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) return clearInterval(state.timer)
-    if (state.agent) startPolling(pollFeed, FEED_POLL_MS)
-    else startPolling(pollList, LIST_POLL_MS)
+    if (document.hidden) {
+      state.stream?.close()
+      state.stream = null
+    } else if (state.agent) openFeed()
+    else openList()
   })
 
   applyTheme()

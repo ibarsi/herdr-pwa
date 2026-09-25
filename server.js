@@ -3,7 +3,8 @@ import { readFile } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { join, normalize, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { herdr, HerdrError } from './herdr.js'
+import { setTimeout as sleep } from 'node:timers/promises'
+import { herdr, subscribe, HerdrError } from './herdr.js'
 import { cleanFeed, hashFeed } from './feed.js'
 import { loadTheme } from './theme.js'
 
@@ -57,6 +58,11 @@ function sendJson(res, status, body) {
 }
 
 function sendError(res, err) {
+  // A stream has already sent its 200; the phone learns of trouble in-band.
+  if (res.headersSent) {
+    console.error('error after headers were sent', err)
+    return res.end()
+  }
   if (err instanceof HttpError) return sendJson(res, err.status, { error: { code: err.code, message: err.message } })
   if (err instanceof HerdrError) {
     console.error(`herdr error ${err.code}: ${err.message}`)
@@ -99,7 +105,7 @@ function projectAgent(a, spaces = new Map()) {
   }
 }
 
-async function listAgents(res) {
+async function getAgents() {
   const [{ agents }, workspaces] = await Promise.all([
     herdr('agent.list', {}),
     // Labels are cosmetic, so a herdr that cannot answer this still gets a
@@ -107,13 +113,12 @@ async function listAgents(res) {
     herdr('workspace.list', {}).then((r) => r.workspaces ?? [], () => []),
   ])
   const spaces = new Map(workspaces.map((w) => [w.workspace_id, w.label]))
-  const projected = agents
+  return agents
     .map((a) => projectAgent(a, spaces))
     .sort(
       (a, b) =>
         (STATUS_ORDER[a.status] ?? 3) - (STATUS_ORDER[b.status] ?? 3) || a.title.localeCompare(b.title)
     )
-  sendJson(res, 200, { agents: projected })
 }
 
 async function serveStatic(req, res, pathname) {
@@ -150,31 +155,23 @@ function authorised(req) {
 
 // 1000 is Herdr's own ceiling for source=recent: it returns the same 1000-line
 // payload for any larger request, so asking for more is just a bigger number.
-const DEFAULT_LINES = { visible: 60, recent: 1000 }
-const MAX_LINES = 1000
+const FEED_LINES = { visible: 60, recent: 1000 }
 
-async function readFeed(res, paneId, query) {
-  const agent = await requireLiveAgent(paneId)
-
-  // Scrollback is the default, and anything unrecognised resolves to it rather
-  // than passing through. `visible` is one phone-height of screen capture with
-  // no history behind it, so opening there gives nothing to scroll up into.
-  const requested = Number.parseInt(query.get('lines') ?? '', 10)
+/**
+ * Reads an agent's pane, cleaned for a phone, as `{text, hash, source}`.
+ *
+ * Scrollback is the default. `visible` is one phone-height of screen capture
+ * with no history behind it, so opening there gives nothing to scroll up into.
+ */
+async function readPane(paneId, wanted) {
   const readSource = (source) =>
-    herdr('agent.read', {
-      target: paneId,
-      source,
-      lines: Number.isFinite(requested)
-        ? Math.min(Math.max(requested, 1), MAX_LINES)
-        : DEFAULT_LINES[source],
-      strip_ansi: true,
-    })
+    herdr('agent.read', { target: paneId, source, lines: FEED_LINES[source], strip_ansi: true })
       // The payload is nested at result.read, not on result directly.
       .then((r) => ({ source, read: r.read }))
 
   let answer
   try {
-    answer = await readSource(query.get('source') === 'visible' ? 'visible' : 'recent')
+    answer = await readSource(wanted)
   } catch (err) {
     // claude and grok paint to the alternate screen, so while they are working
     // Herdr cannot capture their history at all — it only exists as redrawn
@@ -183,13 +180,228 @@ async function readFeed(res, paneId, query) {
     answer = await readSource('visible')
   }
 
-  const { source, read } = answer
-  const text = cleanFeed(read.text ?? '')
-  const hash = hashFeed(text)
-  const status = agent.agent_status ?? 'unknown'
+  const text = cleanFeed(answer.read.text ?? '')
+  return { text, hash: hashFeed(text), source: answer.source }
+}
 
-  if (query.get('h') === hash) return sendJson(res, 200, { unchanged: true, hash, status, source })
-  sendJson(res, 200, { text, hash, truncated: Boolean(read.truncated), status, source })
+const ACTIVE = new Set(['working', 'blocked'])
+// ponytail: Herdr 0.9.1 lists pane_output_changed for events.wait but answers
+// unsupported_event_wait_match, so pane text is read on a timer while an agent
+// works. Replace the read loop in streamFeed with that wait once Herdr has it.
+const FEED_READ_MS = 500
+// Input to an idle agent (an arrow, esc) may change the screen without
+// changing its status, so the phone's own input keeps the feed read briefly.
+const INPUT_BURST_MS = 2000
+const RETRY_MS = 2000
+// Under Tailscale Serve's idle timeout, so an open stream is never reaped.
+const PING_MS = 15000
+
+/**
+ * Starts a server-sent event stream. `send` is a no-op once the phone has gone,
+ * so nothing that finishes late has to check first.
+ */
+function openStream(res) {
+  res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' })
+  res.write(': open\n\n')
+  const ping = setInterval(() => res.write(': ping\n\n'), PING_MS)
+  const stream = {
+    open: true,
+    sub: null,
+    send(event, data) {
+      if (stream.open) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+    },
+    end: () => res.end(),
+  }
+  res.on('close', () => {
+    stream.open = false
+    clearInterval(ping)
+    stream.sub?.close()
+  })
+  return stream
+}
+
+/**
+ * Holds a Herdr subscription open for as long as `stream` is, and re-subscribes
+ * when it drops: Herdr restarts on every `omarchy update`. `stream.resubscribe()`
+ * re-makes it at once, for a caller whose subscription list has gone stale.
+ */
+async function follow(stream, { subscriptions, onStart, onEvent, onError }) {
+  let again = false
+  stream.resubscribe = () => {
+    again = true
+    stream.sub?.close()
+  }
+  while (stream.open) {
+    try {
+      stream.sub = subscribe(await subscriptions(), onEvent)
+      if (!stream.open) return stream.sub.close()
+      await stream.sub.started
+      await onStart()
+      await stream.sub.closed
+      if (!again && stream.open) throw new HerdrError('socket_unavailable', 'herdr closed the subscription')
+    } catch (err) {
+      stream.sub?.close()
+      if (!stream.open) return
+      if (!again) {
+        onError(err)
+        if (!stream.open) return
+        await sleep(RETRY_MS)
+      }
+    }
+    again = false
+  }
+}
+
+/** Wraps `fn` so calls never overlap: a call mid-run queues exactly one more run. */
+function coalesce(fn) {
+  let running = null
+  let queued = false
+  return () => {
+    if (running) {
+      queued = true
+      return running
+    }
+    running = (async () => {
+      try {
+        do {
+          queued = false
+          await fn()
+        } while (queued)
+      } finally {
+        running = null
+      }
+    })()
+    return running
+  }
+}
+
+const LIST_EVENTS = ['pane.created', 'pane.closed', 'pane.exited', 'pane.agent_detected'].map((type) => ({ type }))
+const paneSet = (agents) => agents.map((a) => a.pane_id).sort().join()
+
+/**
+ * Pushes the agent list whenever Herdr says it may have changed. Herdr only
+ * offers status events per pane, so the subscription names every agent pane
+ * and is re-made when that set changes.
+ */
+async function streamAgents(res) {
+  const stream = openStream(res)
+  let covered = ''
+  let last = ''
+  const down = (err) => stream.send('down', { message: err.message })
+  const push = coalesce(async () => {
+    const agents = await getAgents()
+    const body = JSON.stringify(agents)
+    if (body !== last) {
+      last = body
+      stream.send('agents', { agents })
+    }
+    if (paneSet(agents) !== covered) stream.resubscribe()
+  })
+
+  await follow(stream, {
+    subscriptions: async () => {
+      const { agents } = await herdr('agent.list', {})
+      covered = paneSet(agents)
+      return [...LIST_EVENTS, ...agents.map((a) => ({ type: 'pane.agent_status_changed', pane_id: a.pane_id }))]
+    },
+    // Re-sent after every reconnect, even unchanged: it is what turns the light green.
+    onStart: () => {
+      last = ''
+      return push()
+    },
+    onEvent: () => push().catch(down),
+    onError: down,
+  })
+}
+
+/** Every open feed stream's wake-up, by pane, so input from the phone can reach it. */
+const feedNudges = new Map()
+const nudge = (paneId) => feedNudges.get(paneId)?.forEach((fn) => fn())
+
+/**
+ * Pushes one agent's pane text as it changes, plus its status.
+ *
+ * Status and the pane closing come from Herdr as events. The text does not, so
+ * it is read every FEED_READ_MS while the agent is working or blocked, or just
+ * had input from the phone, and not at all otherwise.
+ */
+async function streamFeed(res, paneId, query) {
+  const stream = openStream(res)
+  const wanted = query.get('source') === 'visible' ? 'visible' : 'recent'
+  let status = 'unknown'
+  let hash = null
+  let burstUntil = 0
+  let looping = false
+
+  const gone = () => {
+    stream.send('gone', {})
+    stream.end()
+  }
+  const fail = (err) => {
+    // A closed or recycled pane is the agent ending, not Herdr being down.
+    if (err.status === 404 || err.code === 'agent_not_found' || err.code === 'pane_not_found') return gone()
+    stream.send('down', { message: err.message })
+  }
+  const read = coalesce(async () => {
+    const feed = await readPane(paneId, wanted)
+    if (feed.hash === hash) return
+    hash = feed.hash
+    stream.send('feed', { text: feed.text, source: feed.source })
+  })
+  const loop = async () => {
+    looping = true
+    try {
+      // Checked after each read, so the read that follows going idle is the last.
+      while (stream.open) {
+        await read()
+        if (!ACTIVE.has(status) && Date.now() >= burstUntil) break
+        await sleep(FEED_READ_MS)
+      }
+    } catch (err) {
+      fail(err)
+    } finally {
+      looping = false
+    }
+  }
+  // Mid-loop, an extra read still lands the text from just before a change.
+  const wake = () => (looping ? read().catch(fail) : loop())
+
+  const nudges = feedNudges.get(paneId) ?? new Set()
+  const onInput = () => {
+    burstUntil = Date.now() + INPUT_BURST_MS
+    wake()
+  }
+  feedNudges.set(paneId, nudges.add(onInput))
+  res.on('close', () => {
+    nudges.delete(onInput)
+    if (nudges.size === 0) feedNudges.delete(paneId)
+  })
+
+  await follow(stream, {
+    subscriptions: () => [
+      { type: 'pane.closed' },
+      { type: 'pane.exited' },
+      { type: 'pane.agent_status_changed', pane_id: paneId },
+    ],
+    onStart: async () => {
+      // Re-checked on every (re)subscribe: pane ids are recycled, and a close
+      // that happened while disconnected will never arrive as an event.
+      const agent = await requireLiveAgent(paneId)
+      status = agent.agent_status ?? 'unknown'
+      stream.send('status', { status })
+      wake()
+    },
+    onEvent: (event, data) => {
+      if (data?.pane_id !== paneId) return
+      if (event !== 'pane.agent_status_changed') return gone()
+      status = data.agent_status ?? 'unknown'
+      stream.send('status', { status })
+      wake()
+      // An agent that quits back to the shell leaves the pane open.
+      if (!ACTIVE.has(status)) requireLiveAgent(paneId).catch(fail)
+    },
+    onError: fail,
+  })
 }
 
 const MAX_BODY = 64 * 1024
@@ -227,6 +439,7 @@ async function sendText(req, res, paneId) {
   // and blocked is exactly the state worth answering from a phone.
   if (agent.agent_status === 'blocked') {
     await sendInput(paneId, text)
+    nudge(paneId)
     return sendJson(res, 200, { ok: true, via: 'pane.send_input' })
   }
 
@@ -235,12 +448,14 @@ async function sendText(req, res, paneId) {
   // workarounds, such as the Copilot focus event at agents.rs:182.
   try {
     await herdr('agent.prompt', { target: paneId, text })
+    nudge(paneId)
     return sendJson(res, 200, { ok: true, via: 'agent.prompt' })
   } catch (err) {
     // Required, not defensive: agent_status came from a separate round trip, so
     // the agent can block in between. Without this the reply vanishes silently.
     if (!(err instanceof HerdrError) || err.code !== 'agent_blocked') throw err
     await sendInput(paneId, text)
+    nudge(paneId)
     return sendJson(res, 200, { ok: true, via: 'pane.send_input' })
   }
 }
@@ -261,22 +476,26 @@ async function sendKeys(req, res, paneId) {
   }
   await requireLiveAgent(paneId)
   await herdr('pane.send_input', { pane_id: paneId, keys })
+  nudge(paneId)
   sendJson(res, 200, { ok: true })
 }
 
 async function focusAgent(res, paneId) {
   await requireLiveAgent(paneId)
   await herdr('agent.focus', { target: paneId })
+  nudge(paneId)
   sendJson(res, 200, { ok: true })
 }
 
 async function route(req, res, url) {
   const { pathname } = url
 
-  if (pathname === '/api/agents' && req.method === 'GET') return listAgents(res)
+  if (pathname === '/api/agents' && req.method === 'GET') return sendJson(res, 200, { agents: await getAgents() })
 
-  const feed = pathname.match(/^\/api\/agents\/([^/]+)\/feed$/)
-  if (feed && req.method === 'GET') return readFeed(res, decodeURIComponent(feed[1]), url.searchParams)
+  if (pathname === '/api/stream' && req.method === 'GET') return streamAgents(res)
+
+  const stream = pathname.match(/^\/api\/agents\/([^/]+)\/stream$/)
+  if (stream && req.method === 'GET') return streamFeed(res, decodeURIComponent(stream[1]), url.searchParams)
 
   const send = pathname.match(/^\/api\/agents\/([^/]+)\/send$/)
   if (send && req.method === 'POST') return sendText(req, res, decodeURIComponent(send[1]))

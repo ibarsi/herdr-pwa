@@ -49,3 +49,28 @@ export function classifyLine(line) {
 
   return GLYPHS[glyph] ?? ''
 }
+
+/**
+ * How to turn the painted lines `prev` into `next` without repainting them all:
+ * drop `drop` lines off the top, keep the `keep` after them, discard the rest,
+ * then append `append`.
+ *
+ * The result always rebuilds `next` exactly. The alignment only decides how
+ * much stays in place, and so whether a reader scrolled up keeps their spot
+ * when the 1000-line window slides or the footer is redrawn.
+ *
+ * ponytail: O(n²) worst case over candidate starts; fine for 1000 lines every
+ * 500ms, revisit if the window grows.
+ */
+export function diffLines(prev, next) {
+  let best = { drop: prev.length, keep: 0 }
+  for (let d = 0; d < prev.length; d++) {
+    if (prev[d] !== next[0]) continue
+    let k = 0
+    while (d + k < prev.length && k < next.length && prev[d + k] === next[k]) k++
+    if (k > best.keep) best = { drop: d, keep: k }
+    // Everything after d survived; no later start can keep more.
+    if (d + k === prev.length) break
+  }
+  return { ...best, append: next.slice(best.keep) }
+}
