@@ -14,7 +14,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Required for the linux/arm64 leg. The Dockerfile only copies files, so
       # emulation costs almost nothing here.
