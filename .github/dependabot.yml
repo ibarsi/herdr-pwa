@@ -1,0 +1,40 @@
+# Dependabot version updates. Security updates ignore this schedule
+# and the cooldown; they open as soon as GitHub files an advisory.
+#
+# PR titles must match tools/release.js: `type: description` or
+# `type(scope)!: description`. The prefixes below are that grammar.
+# `ci` and grouped action bumps wait for the next changelog. `fix`
+# on the Docker base image cuts a patch so GHCR republishes.
+#
+# No npm ecosystem: this repo has no package dependencies, by design.
+# No docker-compose: compose.yaml pulls our own GHCR image via
+# HERDR_PWA_VERSION, which is a deploy pin, not a third-party dep.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci(deps)"
+    cooldown:
+      default-days: 4
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "fix(deps)"
+    cooldown:
+      default-days: 4
+    ignore:
+      # AGENTS.md pins Node 26. A 27 bump is a deliberate Dockerfile edit.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
