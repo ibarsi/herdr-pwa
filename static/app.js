@@ -194,11 +194,9 @@ export function showList() {
 // Mirrors KEY_PALETTE in server.js. Labels are what fits on a phone.
 const KEYS = [
   ['1', '1'], ['2', '2'], ['3', '3'],
-  ['y', 'y'], ['n', 'n'],
-  ['enter', '⏎'], ['esc', 'esc'],
   ['up', '↑'], ['down', '↓'],
-  ['tab', '⇥'], ['shift+tab', '⇤'],
-  ['ctrl+c', '^C'],
+  ['enter', '⏎'], ['esc', 'esc'],
+  ['shift+tab', '⇤'],
 ]
 
 /**
