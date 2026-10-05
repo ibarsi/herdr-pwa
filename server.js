@@ -466,7 +466,7 @@ async function sendText(req, res, paneId) {
  * keeps that a 400 rather than a 502 and keeps the surface deliberately small.
  */
 export const KEY_PALETTE = new Set([
-  '1', '2', '3', 'y', 'n', 'enter', 'esc', 'up', 'down', 'tab', 'shift+tab', 'ctrl+c',
+  '1', '2', '3', 'up', 'down', 'enter', 'esc', 'shift+tab',
 ])
 
 async function sendKeys(req, res, paneId) {
