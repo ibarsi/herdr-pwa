@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 (2026-10-05)
+
+### Features
+
+- spellcheck replies, recall sent ones, and trim the key row (#9)
+
+### CI
+
+- **deps:** bump actions/checkout from 4 to 7 (#7)
+- **deps:** bump docker/setup-qemu-action from 3 to 4 (#4)
+- **deps:** bump docker/login-action from 3 to 4 (#5)
+- **deps:** bump docker/metadata-action from 5 to 6 (#6)
+- **deps:** bump actions/setup-node from 4 to 7 (#8)
+- watch actions and the Node image with Dependabot
+
 ## 0.4.0 (2026-09-25)
 
 ### Features
