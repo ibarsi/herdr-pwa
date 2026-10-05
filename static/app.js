@@ -201,6 +201,16 @@ const KEYS = [
   ['ctrl+c', '^C'],
 ]
 
+/**
+ * Steps through sent replies like a shell: `index === history.length` is the
+ * unsent draft. Returns the new index and the text to show, or null at either end.
+ */
+export function recall(history, index, step, draft) {
+  const next = index + step
+  if (next < 0 || next > history.length) return null
+  return { index: next, text: next === history.length ? draft : history[next] }
+}
+
 /** True when the user is reading scrollback rather than following the tail. */
 function atBottom(el) {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 40
@@ -272,24 +282,55 @@ if (typeof document !== 'undefined') {
   $('focus-btn').onclick = () =>
     act(() => postJson(`/api/agents/${encodeURIComponent(state.agent.pane_id)}/focus`, {}))
 
-  for (const [key, label] of KEYS) {
-    const button = document.createElement('button')
-    button.type = 'button'
-    button.textContent = label
-    button.onclick = () =>
-      act(() =>
-        postJson(`/api/agents/${encodeURIComponent(state.agent.pane_id)}/keys`, { keys: [key] })
-      )
-    $('keys').append(button)
-  }
-
   const input = $('text')
 
-  input.addEventListener('input', () => {
+  // Kept in localStorage because iOS kills a backgrounded PWA freely.
+  const history = JSON.parse(localStorage.getItem('replies') ?? '[]')
+  let historyIndex = history.length
+  let draft = ''
+
+  const resize = () => {
     $('send').disabled = input.value.trim() === ''
     // Grow with the content; the CSS max-height caps it.
     input.style.height = 'auto'
     input.style.height = `${input.scrollHeight}px`
+  }
+
+  const cycle = (step) => {
+    if (historyIndex === history.length) draft = input.value
+    const hit = recall(history, historyIndex, step, draft)
+    if (!hit) return
+    historyIndex = hit.index
+    input.value = hit.text
+    input.setSelectionRange(hit.text.length, hit.text.length)
+    resize()
+  }
+
+  for (const [key, label] of KEYS) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.textContent = label
+    const step = { up: -1, down: 1 }[key]
+    // Keep focus in the reply box, so ↑/↓ can tell it was being typed in.
+    if (step) button.onpointerdown = (event) => event.preventDefault()
+    button.onclick = () => {
+      if (step && document.activeElement === input) return cycle(step)
+      act(() =>
+        postJson(`/api/agents/${encodeURIComponent(state.agent.pane_id)}/keys`, { keys: [key] })
+      )
+    }
+    $('keys').append(button)
+  }
+
+  input.addEventListener('input', resize)
+
+  input.addEventListener('keydown', (event) => {
+    const { value, selectionStart: at } = input
+    // Only from the first or last line, so arrows still move within a long reply.
+    if (event.key === 'ArrowUp' && !value.slice(0, at).includes('\n')) cycle(-1)
+    else if (event.key === 'ArrowDown' && !value.slice(at).includes('\n')) cycle(1)
+    else return
+    event.preventDefault()
   })
 
   $('composer').addEventListener('submit', async (event) => {
@@ -302,6 +343,12 @@ if (typeof document !== 'undefined') {
     // like a failure, and the feed stream is the real confirmation either way.
     input.value = ''
     input.style.height = 'auto'
+    if (history.at(-1) !== text) history.push(text)
+    // ponytail: capped at 50 and shared by all agents; key by pane if that gets noisy.
+    if (history.length > 50) history.shift()
+    localStorage.setItem('replies', JSON.stringify(history))
+    historyIndex = history.length
+    draft = ''
 
     await act(() =>
       postJson(`/api/agents/${encodeURIComponent(state.agent.pane_id)}/send`, { text })

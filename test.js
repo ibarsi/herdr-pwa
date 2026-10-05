@@ -288,6 +288,7 @@ test('leaving a feed closes its stream and opens the list stream', () => {
       if (!nodes.has(id)) nodes.set(id, el())
       return nodes.get(id)
     }
+    globalThis.localStorage = { getItem: () => null, setItem() {} }
     globalThis.document = {
       hidden: false,
       documentElement: { style: { setProperty() {} } },
@@ -1123,4 +1124,14 @@ test('GET /api/version reports the running version without touching the socket',
   } finally {
     await app.close()
   }
+})
+
+test('recall steps through sent replies and back to the draft', async () => {
+  const { recall } = await import('./static/app.js')
+  const history = ['one', 'two']
+  assert.deepEqual(recall(history, 2, -1, 'draft'), { index: 1, text: 'two' })
+  assert.deepEqual(recall(history, 1, -1, 'draft'), { index: 0, text: 'one' })
+  assert.equal(recall(history, 0, -1, 'draft'), null)
+  assert.deepEqual(recall(history, 1, 1, 'draft'), { index: 2, text: 'draft' })
+  assert.equal(recall(history, 2, 1, 'draft'), null)
 })
