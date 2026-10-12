@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0 (2026-10-12)
+
+### Features
+
+- make the adapter port configurable via PORT (#12)
+
+### CI
+
+- **deps:** bump docker/build-push-action from 6 to 7 (#11)
+- **deps:** bump docker/setup-buildx-action from 3 to 4 (#10)
+
 ## 0.5.0 (2026-10-05)
 
 ### Features
