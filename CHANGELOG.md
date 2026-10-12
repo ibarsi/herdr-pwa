@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.1 (2026-10-12)
+
+### Fixes
+
+- warn from mise up when Tailscale Serve misses PORT (#14)
+
+### Documentation
+
+- list every env var in .env.example (#13)
+
 ## 0.6.0 (2026-10-12)
 
 ### Features
