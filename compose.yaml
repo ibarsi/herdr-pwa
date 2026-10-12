@@ -11,8 +11,9 @@ services:
     user: "${HERDR_UID:-1000}:${HERDR_GID:-1000}"
     # Loopback only. Tailscale Serve is the sole ingress; binding 0.0.0.0 on the
     # host would publish the adapter to the LAN with no authentication in front.
+    # PORT picks the host port; the container always listens on 8787.
     ports:
-      - "127.0.0.1:8787:8787"
+      - "127.0.0.1:${PORT:-8787}:8787"
     # Directory mount, not the socket file: a file-mount pins the inode across Herdr restarts.
     volumes:
       - ${HOME}/.config/herdr:/herdr:ro

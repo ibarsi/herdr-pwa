@@ -44,7 +44,7 @@ You need:
 cp .env.example .env
 ```
 
-Set `ALLOWED_LOGIN` to your Tailscale login, the value Serve puts in `Tailscale-User-Login`. `HERDR_UID` and `HERDR_GID` default to 1000. If your user is not uid 1000, set them to `id -u` and `id -g`. The container has to match the owner of Herdr's `0600` socket.
+Set `ALLOWED_LOGIN` to your Tailscale login, the value Serve puts in `Tailscale-User-Login`. `HERDR_UID` and `HERDR_GID` default to 1000. If your user is not uid 1000, set them to `id -u` and `id -g`. The container has to match the owner of Herdr's `0600` socket. `PORT` sets the host port and defaults to 8787. `mise dev`, `mise up`, and `mise serve` all read it from the shell or `.env`.
 
 `.env` is gitignored.
 
@@ -54,7 +54,7 @@ Set `ALLOWED_LOGIN` to your Tailscale login, the value Serve puts in `Tailscale-
 mise phone
 ```
 
-That pulls the released image, starts compose on `127.0.0.1:8787`, and runs `tailscale serve --bg 8787`. It prints this node's MagicDNS URL.
+That pulls the released image, starts compose on `127.0.0.1:8787`, and runs `tailscale serve --bg 8787` (or your `PORT`). It prints this node's MagicDNS URL.
 
 On the iPhone, with Tailscale connected:
 
@@ -88,7 +88,7 @@ mise smoke    # GET /api/agents
 
 `mise dev` skips the Tailscale identity check so you can open the adapter from the host. `compose.yaml` leaves that check on.
 
-Open `http://127.0.0.1:8787/` in a desktop browser. `mise dev` and `mise up` both bind 8787, so run one of them.
+Open `http://127.0.0.1:8787/` in a desktop browser. `mise dev` and `mise up` both bind `PORT`, so run one of them or give one a different `PORT`.
 
 ## Releases
 

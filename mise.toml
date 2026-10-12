@@ -4,7 +4,7 @@ node = "26"
 [env]
 HERDR_SOCKET_PATH = "{{env.HOME}}/.config/herdr/herdr.sock"
 HERDR_CONFIG_PATH = "{{env.HOME}}/.config/herdr/config.toml"
-PORT = "8787"
+PORT = "{{ get_env(name='PORT', default='8787') }}"
 
 # =============================================================================
 # Local development
@@ -16,10 +16,15 @@ alias = "t"
 run = "node --test"
 
 [tasks.dev]
-description = "Foreground adapter on 127.0.0.1:8787 with Tailscale auth bypass"
+description = "Foreground adapter on 127.0.0.1:PORT with Tailscale auth bypass"
 alias = "d"
 env = { DEV_BYPASS_AUTH = "1" }
-run = "node server.js"
+run = """
+set -a
+[ -f .env ] && . ./.env
+set +a
+node server.js
+"""
 
 [tasks.smoke]
 description = "GET /api/agents against a running adapter (bypass or identity header)"
@@ -48,7 +53,7 @@ run = "node tools/release.js --dry-run"
 # =============================================================================
 
 [tasks.up]
-description = "Pull the released image and start compose on 127.0.0.1:8787 (auth on)"
+description = "Pull the released image and start compose on 127.0.0.1:PORT (auth on)"
 run = """
 set -a
 [ -f .env ] && . ./.env
@@ -76,8 +81,13 @@ description = "Follow compose logs"
 run = "docker compose logs -f"
 
 [tasks.serve]
-description = "Publish 127.0.0.1:8787 on the tailnet via Tailscale Serve"
-run = "tailscale serve --bg 8787 && tailscale serve status"
+description = "Publish 127.0.0.1:PORT on the tailnet via Tailscale Serve"
+run = """
+set -a
+[ -f .env ] && . ./.env
+set +a
+tailscale serve --bg "${PORT}" && tailscale serve status
+"""
 
 [tasks."serve:off"]
 description = "Clear Tailscale Serve config on this node"
