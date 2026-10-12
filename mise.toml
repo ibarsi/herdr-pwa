@@ -66,6 +66,14 @@ if [ -z "${ALLOWED_LOGIN:-}" ]; then
 fi
 docker compose pull
 docker compose up -d
+# Serve keeps its own target port. After a PORT change it still forwards to the
+# old one and the phone loses the adapter.
+if command -v tailscale >/dev/null &&
+  st=$(tailscale serve status 2>/dev/null) &&
+  echo "$st" | grep -q 'proxy http://127.0.0.1:' &&
+  ! echo "$st" | grep -qE "proxy http://127\\.0\\.0\\.1:${PORT}$"; then
+  echo "warning: Tailscale Serve does not forward to 127.0.0.1:${PORT}. Run: mise serve" >&2
+fi
 """
 
 [tasks.build]
@@ -96,8 +104,8 @@ run = "tailscale serve reset"
 [tasks.phone]
 description = "Compose up + Tailscale Serve, then print the Safari URL"
 run = """
-mise run up
 mise run serve
+mise run up
 dns=$(tailscale status --json | node -e "
   let s = ''
   process.stdin.on('data', (c) => { s += c })
