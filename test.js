@@ -4,7 +4,7 @@ import net from 'node:net'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, readFileSync } from 'node:fs'
 import { herdr, HerdrError } from './herdr.js'
 import { cleanFeed, hashFeed } from './feed.js'
 import { parseColor, resolveTheme, loadTheme } from './theme.js'
@@ -12,6 +12,7 @@ import { createServer } from './server.js'
 import { classifyLine, diffLines } from './static/lines.js'
 import {
   parseSubject, parseCommits, bumpLevel, nextVersion, renderChangelog, readNotes,
+  setManifestVersion,
 } from './tools/release.js'
 
 let sockSeq = 0
@@ -1048,6 +1049,17 @@ test('nextVersion applies ordinary semver at 1.0.0 and above', () => {
 
 test('nextVersion returns null when there is nothing to release', () => {
   assert.equal(nextVersion('0.1.0', null), null)
+})
+
+test('setManifestVersion bumps the plugin manifest, which tracks package.json', () => {
+  const toml = readFileSync('herdr-plugin.toml', 'utf8')
+  const { version } = JSON.parse(readFileSync('package.json', 'utf8'))
+  assert.match(toml, new RegExp(`^version = "${version.replaceAll('.', '\\.')}"$`, 'm'))
+  const bumped = setManifestVersion(toml, '9.9.9')
+  assert.match(bumped, /^version = "9\.9\.9"$/m)
+  const minHerdr = (t) => t.match(/^min_herdr_version = .*$/m)[0]
+  assert.equal(minHerdr(bumped), minHerdr(toml))
+  assert.throws(() => setManifestVersion('id = "x"\n', '1.0.0'))
 })
 
 test('renderChangelog groups by type and labels scopes', () => {

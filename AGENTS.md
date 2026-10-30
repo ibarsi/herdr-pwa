@@ -13,7 +13,7 @@ Releases are cut from commit subjects on `main`. A push to `main` runs `.github/
 ## Version and image
 
 - `package.json` `"version"` is the running version. The server reads it once at startup, and the image copies that file. Do not hardcode a version in the client or in `static/sw.js`.
-- Do not edit the version or `CHANGELOG.md` by hand. `.github/workflows/cut-release.yml` owns both. `0.0.0` is the unreleased baseline. The first real tag comes from that workflow.
+- Do not edit the version or `CHANGELOG.md` by hand. `.github/workflows/cut-release.yml` owns both. `tools/release.js` also writes the `version` line of `herdr-plugin.toml`, and a test fails if it drifts from `package.json`. `0.0.0` is the unreleased baseline. The first real tag comes from that workflow.
 - Reaching `1.0.0` is a deliberate edit of `package.json`, never a side effect of a breaking commit.
 - `compose.yaml` pulls `ghcr.io/ibarsi/herdr-pwa:${HERDR_PWA_VERSION:-latest}`. Do not add a `build:` key. Test a Dockerfile change with `mise build`.
 - The Dockerfile `COPY` list is hand-maintained. A new file the running server needs has to be added there. `tools/release.js` stays out of the image. It runs on the maintainer's machine and in GitHub Actions.
@@ -27,6 +27,12 @@ Releases are cut from commit subjects on `main`. A push to `main` runs `.github/
 - `.github/workflows/release.yml` only reacts to `v*` tags.
 - Every `uses:` is pinned to a full commit SHA with a `# vX.Y.Z` comment. Dependabot bumps both. `cut-release.yml` holds the deploy key that bypasses the ruleset, so a moved tag there could push to `main`.
 - Do not run `node tools/release.js` without `--dry-run` unless the user asks. A push to `main` already cuts the release.
+
+## Herdr plugin
+
+- `herdr-plugin.toml` lists the repo in the Herdr plugin marketplace. The marketplace indexes the `herdr-plugin` GitHub topic and the manifest on `main`.
+- The plugin is a launcher. `tools/plugin.sh` drives compose and Tailscale Serve, and reads `.env` from `HERDR_PLUGIN_CONFIG_DIR`. Do not route it through mise: Herdr launches without a login shell, and a fresh checkout's `mise.toml` is untrusted.
+- No `[[startup]]` hook. Herdr runs startup hooks one-shot, not as daemons, and compose's restart policy already brings the adapter back.
 
 ## Code owners
 
