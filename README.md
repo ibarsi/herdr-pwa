@@ -78,6 +78,19 @@ mise serve:off
 
 `mise logs` follows compose. `mise status` shows compose and Tailscale Serve.
 
+### As a Herdr plugin
+
+herdr-pwa is also listed in the [Herdr plugin marketplace](https://herdr.dev/tui/docs/marketplace/). The plugin is a launcher for the same released image. It needs Docker and Tailscale, but not mise or a clone.
+
+```sh
+herdr plugin install ibarsi/herdr-pwa
+$EDITOR "$(herdr plugin config-dir ibarsi.herdr-pwa)/.env"
+```
+
+That `.env` takes the same keys as [`.env.example`](.env.example). At minimum, `ALLOWED_LOGIN`. Updates replace the plugin checkout, so it is kept there. Then run the actions from Herdr: **Start phone adapter** (pull, compose up, Tailscale Serve), **Phone adapter status**, and **Stop phone adapter**. Their output is in `herdr plugin log list`. Compose restarts the adapter after a reboot, so Herdr does not start it.
+
+To upgrade, run `herdr plugin update`. Its build step pulls the newest image and recreates the adapter, but only if it is running. A stopped adapter stays stopped, and `HERDR_PWA_VERSION` in `.env` still pins a version. If the pull fails, the plugin update still goes through and the build output says to run **Start phone adapter**.
+
 ## Develop
 
 ```sh

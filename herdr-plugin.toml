@@ -1,0 +1,34 @@
+id = "ibarsi.herdr-pwa"
+name = "herdr-pwa"
+# tools/release.js bumps this with package.json. Do not edit by hand.
+version = "0.6.1"
+min_herdr_version = "0.9.0"
+description = "Phone companion for Herdr over Tailscale: see which agents are running, read what they show, and answer them"
+platforms = ["linux", "macos"]
+
+# A thin launcher. The adapter is the released Docker image, run by compose with
+# restart: unless-stopped, so it outlives Herdr.
+# Needs Docker and Tailscale, and .env in `herdr plugin config-dir ibarsi.herdr-pwa`.
+
+# Nothing compiles. `herdr plugin update` re-runs [[build]], so this is the hook
+# that moves a running adapter to the newest image after an update.
+[[build]]
+command = ["sh", "tools/plugin.sh", "refresh"]
+
+[[actions]]
+id = "start"
+title = "Start phone adapter"
+contexts = ["workspace"]
+command = ["sh", "tools/plugin.sh", "start"]
+
+[[actions]]
+id = "stop"
+title = "Stop phone adapter"
+contexts = ["workspace"]
+command = ["sh", "tools/plugin.sh", "stop"]
+
+[[actions]]
+id = "status"
+title = "Phone adapter status"
+contexts = ["workspace"]
+command = ["sh", "tools/plugin.sh", "status"]

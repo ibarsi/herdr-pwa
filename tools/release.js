@@ -95,6 +95,15 @@ export function renderChangelog(version, date, commits) {
   return out.join('\n')
 }
 
+// Anchored to a top-level line so a [[table]] key named version is never touched.
+const MANIFEST_VERSION = /^version = "[^"]*"$/m
+
+/** Rewrites the herdr-plugin.toml version, which the marketplace card shows. */
+export function setManifestVersion(toml, version) {
+  if (!MANIFEST_VERSION.test(toml)) throw new Error('herdr-plugin.toml has no version line')
+  return toml.replace(MANIFEST_VERSION, `version = "${version}"`)
+}
+
 /** Pulls one version's body out of CHANGELOG.md, for the GitHub Release. */
 export function readNotes(changelog, version) {
   const lines = changelog.split('\n')
@@ -167,6 +176,7 @@ const logSince = (tag) => git('log', tag ? `${tag}..HEAD` : 'HEAD', '--no-merges
 function main(args) {
   const pkgPath = join(ROOT, 'package.json')
   const changelogPath = join(ROOT, 'CHANGELOG.md')
+  const manifestPath = join(ROOT, 'herdr-plugin.toml')
 
   if (args[0] === '--check-title') {
     // Shares one grammar with the changelog parser, so CI cannot accept a
@@ -222,14 +232,17 @@ function main(args) {
     return console.log(section)
   }
 
+  // Before any write, so a malformed manifest leaves nothing half-bumped.
+  const manifest = setManifestVersion(readFileSync(manifestPath, 'utf8'), version)
   pkg.version = version
   writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`)
+  writeFileSync(manifestPath, manifest)
 
   const previous = existsSync(changelogPath) ? readFileSync(changelogPath, 'utf8') : '# Changelog\n'
   const body = previous.slice(previous.indexOf('\n') + 1).trim()
   writeFileSync(changelogPath, `# Changelog\n\n${section}${body === '' ? '' : `\n${body}\n`}`)
 
-  git('add', 'package.json', 'CHANGELOG.md')
+  git('add', 'package.json', 'herdr-plugin.toml', 'CHANGELOG.md')
   git('commit', '-m', `chore(release): ${version}`)
   git('tag', `v${version}`)
   if (ci) {
