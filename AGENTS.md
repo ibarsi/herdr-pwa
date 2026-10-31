@@ -25,6 +25,7 @@ Releases are cut from commit subjects on `main`. A push to `main` runs `.github/
 - `.github/workflows/ci.yml` triggers on `pull_request`, never `pull_request_target`. The pull request title is passed through `env`, never interpolated into `run`.
 - `.github/workflows/cut-release.yml` is the only workflow that writes to `main`. It pushes with the `RELEASE_DEPLOY_KEY` deploy key, which is on the ruleset bypass list. Do not switch that push to `GITHUB_TOKEN`: a token push is rejected by the ruleset and does not start the tag workflow.
 - `.github/workflows/release.yml` only reacts to `v*` tags.
+- Every `uses:` is pinned to a full commit SHA with a `# vX.Y.Z` comment. Dependabot bumps both. `cut-release.yml` holds the deploy key that bypasses the ruleset, so a moved tag there could push to `main`.
 - Do not run `node tools/release.js` without `--dry-run` unless the user asks. A push to `main` already cuts the release.
 
 ## Code owners
