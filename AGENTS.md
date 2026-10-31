@@ -32,6 +32,7 @@ Releases are cut from commit subjects on `main`. A push to `main` runs `.github/
 
 - `herdr-plugin.toml` lists the repo in the Herdr plugin marketplace. The marketplace indexes the `herdr-plugin` GitHub topic and the manifest on `main`.
 - The plugin is a launcher. `tools/plugin.sh` drives compose and Tailscale Serve, and reads `.env` from `HERDR_PLUGIN_CONFIG_DIR`. Do not route it through mise: Herdr launches without a login shell, and a fresh checkout's `mise.toml` is untrusted.
+- `[[build]]` runs `tools/plugin.sh refresh`. Herdr re-runs builds on every `herdr plugin update` that moves the commit, with `HERDR_PLUGIN_*` scrubbed from the environment, so the script resolves its config with `herdr plugin config-dir`. A failed build aborts the install or update, so `refresh` exits 0 when there is no `.env`, when the adapter is stopped, or when the pull fails.
 - No `[[startup]]` hook. Herdr runs startup hooks one-shot, not as daemons, and compose's restart policy already brings the adapter back.
 
 ## Code owners

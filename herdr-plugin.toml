@@ -7,8 +7,13 @@ description = "Phone companion for Herdr over Tailscale: see which agents are ru
 platforms = ["linux", "macos"]
 
 # A thin launcher. The adapter is the released Docker image, run by compose with
-# restart: unless-stopped, so it outlives Herdr. No [[build]]: nothing compiles.
+# restart: unless-stopped, so it outlives Herdr.
 # Needs Docker and Tailscale, and .env in `herdr plugin config-dir ibarsi.herdr-pwa`.
+
+# Nothing compiles. `herdr plugin update` re-runs [[build]], so this is the hook
+# that moves a running adapter to the newest image after an update.
+[[build]]
+command = ["sh", "tools/plugin.sh", "refresh"]
 
 [[actions]]
 id = "start"
