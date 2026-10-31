@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0 (2026-10-31)
+
+### Features
+
+- publish as a Herdr plugin (#16)
+
+### CI
+
+- pin GitHub Actions to commit SHAs (#15)
+
 ## 0.6.1 (2026-10-12)
 
 ### Fixes

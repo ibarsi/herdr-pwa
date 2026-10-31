@@ -1,7 +1,7 @@
 id = "ibarsi.herdr-pwa"
 name = "herdr-pwa"
 # tools/release.js bumps this with package.json. Do not edit by hand.
-version = "0.6.1"
+version = "0.7.0"
 min_herdr_version = "0.9.0"
 description = "Phone companion for Herdr over Tailscale: see which agents are running, read what they show, and answer them"
 platforms = ["linux", "macos"]
